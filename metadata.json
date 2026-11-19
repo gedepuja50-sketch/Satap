@@ -1,0 +1,8 @@
+{
+  "name": "Sistem Manajemen Sekolah — SMPN Satu Atap Besakih",
+  "description": "Sistem Manajemen Sekolah terpadu SMPN Satu Atap Besakih (NPSN 50104110), Kec. Rendang, Kab. Karangasem, Bali.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

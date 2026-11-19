@@ -3,9 +3,11 @@
 import React, {useMemo, useState} from 'react';
 import {
   Building2,
+  CheckCircle2,
   Download,
   Edit3,
   FileSpreadsheet,
+  Lock,
   Package,
   Plus,
   Search,
@@ -55,6 +57,7 @@ export const SaranaPrasaranaPage: React.FC = () => {
     addLog,
   } = useSchool();
   const isAdmin = currentUser?.role === 'ADMIN';
+  const canManageSarpras = isAdmin || Boolean(currentUser?.aksesSarpras);
   const {buildings, assets, schoolProfile} = state;
 
   const [selectedBuildingId, setSelectedBuildingId] = useState<string>('ALL');
@@ -155,8 +158,29 @@ export const SaranaPrasaranaPage: React.FC = () => {
         ? 'text-amber-600 dark:text-amber-400'
         : 'text-red-600 dark:text-red-400';
 
+  if (!canManageSarpras) {
+    return (
+      <div className="rounded-2xl border border-amber-200 dark:border-amber-900/60 bg-white dark:bg-slate-900 p-8 text-center">
+        <Lock className="w-10 h-10 text-amber-600 mx-auto mb-2" />
+        <h1 className="text-lg font-display font-bold">Akses Sarana &amp; Prasarana Terbatas</h1>
+        <p className="text-sm text-slate-500 mt-1">
+          Menu ini hanya dapat diakses oleh Admin atau Staf/Pengguna yang diberi tugas input data Sarana &amp; Prasarana.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
+      {!isAdmin && currentUser?.aksesSarpras && (
+        <div className="rounded-2xl border border-teal-200 dark:border-teal-800/70 bg-teal-50/80 dark:bg-teal-950/30 px-4 py-3 flex items-start sm:items-center gap-3 text-xs sm:text-sm text-teal-900 dark:text-teal-200">
+          <CheckCircle2 className="w-5 h-5 text-teal-700 dark:text-teal-400 shrink-0 mt-0.5 sm:mt-0" />
+          <p>
+            Akses Penugasan Aktif: <strong>{currentUser.tugasTambahan || 'Input Data Sarana & Prasarana Sekolah'}</strong>. Anda dapat menambahkan dan memperbarui data gedung maupun aset sekolah secara langsung.
+          </p>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
@@ -287,7 +311,7 @@ export const SaranaPrasaranaPage: React.FC = () => {
                     >
                       <Edit3 className="w-3.5 h-3.5" />
                     </button>
-                    {isAdmin && (
+                    {canManageSarpras && (
                       <button
                         type="button"
                         onClick={() =>
@@ -403,7 +427,7 @@ export const SaranaPrasaranaPage: React.FC = () => {
                         >
                           <Edit3 className="w-4 h-4" />
                         </button>
-                        {isAdmin && (
+                        {canManageSarpras && (
                           <button
                             type="button"
                             onClick={() =>

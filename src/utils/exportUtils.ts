@@ -12,6 +12,8 @@ import {
   DAFTAR_MAPEL,
   EducationPeriod,
   GradeSettings,
+  Guru,
+  GuruCertificate,
   KepalaSekolah,
   KelasLevel,
   NilaiRecord,
@@ -23,7 +25,13 @@ import {
   Siswa,
   StudentRaporExtras,
 } from '../types/school';
-import {formatTanggalId, getPredikatNilai, hitungRataDaftar, hitungRataRata} from './gradeUtils';
+import {
+  evaluateStudentPromotionStatus,
+  formatTanggalId,
+  getPredikatNilai,
+  hitungRataDaftar,
+  hitungRataRata,
+} from './gradeUtils';
 
 async function toPngDataUrl(src: string): Promise<string | null> {
   if (!src) return null;
@@ -762,7 +770,12 @@ export async function exportPusatArsipZip(
   return fileCount;
 }
 
-// 7. EKSPOR BAGAN RAPORT TERPADU (NILAI MAPEL + CATATAN GURU + EKSTRAKURIKULER + ABSENSI + CATATAN WALI)
+// 7. EKSPOR BAGAN RAPORT TERPADU / NILAI AKHIR + EKSTRAKURIKULER DALAM 1 KERTAS PER SISWA
+export interface CombinedRaportPdfOptions {
+  headingTitle?: string;
+  filePrefix?: string;
+}
+
 async function renderStudentRaportOnDoc(
   doc: jsPDF,
   siswa: Siswa,
@@ -771,30 +784,32 @@ async function renderStudentRaportOnDoc(
   nilaiRecords: NilaiRecord[],
   studentRaporExtras: StudentRaporExtras[],
   gradeSettings: GradeSettings,
-  kepalaSekolah?: KepalaSekolah
+  kepalaSekolah?: KepalaSekolah,
+  subjects: string[] = DAFTAR_MAPEL,
+  options?: CombinedRaportPdfOptions
 ) {
   const startY = await drawSchoolHeaderPdf(
     doc,
     school,
-    'LAPORAN HASIL BELAJAR PESERTA DIDIK (RAPORT)',
+    options?.headingTitle || 'LAPORAN HASIL BELAJAR PESERTA DIDIK (RAPORT)',
     `Periode Pendidikan: ${period.label}`
   );
 
-  // Blok Identitas Siswa
+  // Blok Identitas Siswa (kompak agar 1 kertas muat penuh)
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.5);
+  doc.setFontSize(8.2);
   doc.setTextColor(30, 41, 59);
-  doc.text(`Nama Peserta Didik : ${siswa.nama}`, 14, startY + 2);
-  doc.text(`NIS / NISN                : ${siswa.nis} / ${siswa.nisn}`, 14, startY + 7);
-  doc.text(`Kelas                         : ${siswa.kelas}`, 128, startY + 2);
-  doc.text(`Tahun Ajaran / Sem. : ${period.tahunAjaran} / ${period.semester}`, 128, startY + 7);
+  doc.text(`Nama Peserta Didik : ${siswa.nama}`, 14, startY + 1.5);
+  doc.text(`NIS / NISN                : ${siswa.nis} / ${siswa.nisn}`, 14, startY + 6);
+  doc.text(`Kelas                         : ${siswa.kelas}`, 128, startY + 1.5);
+  doc.text(`Tahun Ajaran / Sem. : ${period.tahunAjaran} / ${period.semester}`, 128, startY + 6);
 
   // A. Tabel Nilai Mata Pelajaran & Catatan Guru
   const studentNilai = nilaiRecords.filter(
     (n) => n.periodId === period.id && n.siswaId === siswa.id
   );
 
-  const mapelBody = DAFTAR_MAPEL.map((mapel, idx) => {
+  const mapelBody = subjects.map((mapel, idx) => {
     const rec = studentNilai.find((n) => n.mapel === mapel);
     const kkm = gradeSettings.kkmPerMapel[mapel] ?? 75;
     const avgTugas = rec ? (hitungRataDaftar(rec.tugasList) ?? rec.tugas ?? null) : null;
@@ -819,20 +834,29 @@ async function renderStudentRaportOnDoc(
     ];
   });
 
+  const compactMode = subjects.length > 12;
+  const tableFontSize = subjects.length > 15 ? 6.2 : compactMode ? 6.6 : 7.0;
+  const tableCellPadding = subjects.length > 15 ? 0.95 : compactMode ? 1.1 : 1.3;
+
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
+  doc.setFontSize(9);
   doc.setTextColor(15, 118, 110);
-  doc.text('A. Capaian Kompetensi Mata Pelajaran & Catatan Guru', 14, startY + 13);
+  doc.text('A. Nilai Akhir Mata Pelajaran & Catatan Guru', 14, startY + 11);
 
   autoTable(doc, {
-    startY: startY + 15,
+    startY: startY + 12.8,
     head: [
       ['No', 'Mata Pelajaran', 'KKM', 'Tugas', 'Harian', 'UTS', 'UAS', 'Akhir', 'Pred', 'Ket.', 'Catatan Guru'],
     ],
     body: mapelBody,
-    styles: {fontSize: 7.2, cellPadding: 1.6, overflow: 'linebreak'},
+    styles: {
+      fontSize: tableFontSize,
+      cellPadding: tableCellPadding,
+      overflow: 'linebreak',
+    },
     headStyles: {fillColor: [15, 118, 110], textColor: 255, fontStyle: 'bold'},
     alternateRowStyles: {fillColor: [248, 250, 252]},
+    rowPageBreak: 'avoid',
     columnStyles: {
       0: {halign: 'center', cellWidth: 7},
       1: {cellWidth: 34},
@@ -858,7 +882,7 @@ async function renderStudentRaportOnDoc(
   });
 
   let nextY =
-    ((doc as unknown as {lastAutoTable?: {finalY: number}}).lastAutoTable?.finalY || startY + 115) + 6;
+    ((doc as unknown as {lastAutoTable?: {finalY: number}}).lastAutoTable?.finalY || startY + 110) + 4.5;
 
   // B. Tabel Ekstrakurikuler
   const extra = studentRaporExtras.find(
@@ -867,12 +891,12 @@ async function renderStudentRaportOnDoc(
   const ekskuls = extra?.ekstrakurikuler || [];
 
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
+  doc.setFontSize(9);
   doc.setTextColor(15, 118, 110);
-  doc.text('B. Kegiatan Ekstrakurikuler', 14, nextY);
+  doc.text('B. Nilai Kegiatan Ekstrakurikuler', 14, nextY);
 
   autoTable(doc, {
-    startY: nextY + 2,
+    startY: nextY + 1.8,
     head: [['No', 'Kegiatan Ekstrakurikuler', 'Predikat', 'Nilai', 'Keterangan']],
     body:
       ekskuls.length > 0
@@ -884,8 +908,9 @@ async function renderStudentRaportOnDoc(
             ex.keterangan || '-',
           ])
         : [['-', 'Belum ada kegiatan ekstrakurikuler tercatat', '-', '-', '-']],
-    styles: {fontSize: 7.5, cellPadding: 1.8},
+    styles: {fontSize: tableFontSize + 0.2, cellPadding: tableCellPadding + 0.15},
     headStyles: {fillColor: [217, 119, 6], textColor: 255, fontStyle: 'bold'},
+    rowPageBreak: 'avoid',
     columnStyles: {
       0: {halign: 'center', cellWidth: 8},
       2: {cellWidth: 32},
@@ -894,59 +919,99 @@ async function renderStudentRaportOnDoc(
   });
 
   nextY =
-    ((doc as unknown as {lastAutoTable?: {finalY: number}}).lastAutoTable?.finalY || nextY + 25) + 6;
+    ((doc as unknown as {lastAutoTable?: {finalY: number}}).lastAutoTable?.finalY || nextY + 22) + 4.5;
 
-  // C. Ketidakhadiran & Catatan Wali Kelas
+  // C. Ketidakhadiran, Catatan Wali Kelas & Keputusan Semester Genap
   const pageHeight = doc.internal.pageSize.getHeight();
-  if (nextY > pageHeight - 58) {
+  if (nextY > pageHeight - 36) {
     doc.addPage();
-    nextY = 18;
+    nextY = 16;
   }
 
+  const promotion = evaluateStudentPromotionStatus(
+    siswa,
+    period,
+    subjects,
+    nilaiRecords,
+    gradeSettings
+  );
+
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
+  doc.setFontSize(9);
   doc.setTextColor(15, 118, 110);
-  doc.text('C. Ketidakhadiran & Catatan Wali Kelas', 14, nextY);
+  doc.text('C. Ketidakhadiran, Catatan Wali Kelas & Keterangan Akhir Semester', 14, nextY);
+
+  const absensiHead =
+    period.semester === 'Genap'
+      ? [['Sakit', 'Izin', 'Alpa', 'Catatan Wali Kelas', 'Keputusan Akhir (Genap)']]
+      : [['Sakit', 'Izin', 'Tanpa Keterangan (Alpa)', 'Catatan Wali Kelas']];
+  const absensiBody =
+    period.semester === 'Genap'
+      ? [
+          [
+            `${extra?.sakit ?? 0} hari`,
+            `${extra?.izin ?? 0} hari`,
+            `${extra?.alpa ?? 0} hari`,
+            extra?.catatanWaliKelas?.trim() || '-',
+            promotion.label,
+          ],
+        ]
+      : [
+          [
+            `${extra?.sakit ?? 0} hari`,
+            `${extra?.izin ?? 0} hari`,
+            `${extra?.alpa ?? 0} hari`,
+            extra?.catatanWaliKelas?.trim() || '-',
+          ],
+        ];
 
   autoTable(doc, {
-    startY: nextY + 2,
-    head: [['Sakit', 'Izin', 'Tanpa Keterangan (Alpa)', 'Catatan Wali Kelas']],
-    body: [
-      [
-        `${extra?.sakit ?? 0} hari`,
-        `${extra?.izin ?? 0} hari`,
-        `${extra?.alpa ?? 0} hari`,
-        extra?.catatanWaliKelas?.trim() || '-',
-      ],
-    ],
-    styles: {fontSize: 8, cellPadding: 2},
+    startY: nextY + 1.8,
+    head: absensiHead,
+    body: absensiBody,
+    styles: {fontSize: tableFontSize + 0.3, cellPadding: tableCellPadding + 0.2},
     headStyles: {fillColor: [51, 65, 85], textColor: 255, fontStyle: 'bold'},
-    columnStyles: {
-      0: {halign: 'center', cellWidth: 22},
-      1: {halign: 'center', cellWidth: 22},
-      2: {halign: 'center', cellWidth: 36},
-      3: {cellWidth: 'auto'},
+    rowPageBreak: 'avoid',
+    columnStyles:
+      period.semester === 'Genap'
+        ? {
+            0: {halign: 'center', cellWidth: 16},
+            1: {halign: 'center', cellWidth: 16},
+            2: {halign: 'center', cellWidth: 16},
+            3: {cellWidth: 'auto'},
+            4: {halign: 'center', cellWidth: 42, fontStyle: 'bold'},
+          }
+        : {
+            0: {halign: 'center', cellWidth: 20},
+            1: {halign: 'center', cellWidth: 20},
+            2: {halign: 'center', cellWidth: 34},
+            3: {cellWidth: 'auto'},
+          },
+    didParseCell: (data) => {
+      if (period.semester === 'Genap' && data.section === 'body' && data.column.index === 4) {
+        data.cell.styles.textColor = promotion.isQualified ? [22, 163, 74] : [180, 83, 9];
+      }
     },
   });
 
   const sigY =
-    ((doc as unknown as {lastAutoTable?: {finalY: number}}).lastAutoTable?.finalY || nextY + 20) + 10;
+    ((doc as unknown as {lastAutoTable?: {finalY: number}}).lastAutoTable?.finalY || nextY + 16) + 6;
 
-  if (sigY < pageHeight - 25) {
+  if (sigY <= pageHeight - 21) {
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8.5);
+    doc.setFontSize(8.2);
     doc.setTextColor(30, 41, 59);
     doc.text('Mengetahui,', 20, sigY);
-    doc.text('Orang Tua / Wali', 20, sigY + 4);
-    doc.text('( .............................. )', 16, sigY + 20);
+    doc.text('Orang Tua / Wali', 20, sigY + 3.8);
+    doc.text('( .............................. )', 16, sigY + 17);
 
     doc.text(`Besakih, ${formatTanggalId(new Date().toISOString())}`, 136, sigY);
-    doc.text(`Kepala ${school.nama}`, 136, sigY + 4);
+    doc.text(`Kepala ${school.nama}`, 136, sigY + 3.8);
     doc.setFont('helvetica', 'bold');
-    doc.text(kepalaSekolah?.nama || 'Kepala Sekolah', 136, sigY + 20);
+    doc.text(kepalaSekolah?.nama || 'Kepala Sekolah', 136, sigY + 17);
     doc.setFont('helvetica', 'normal');
     if (kepalaSekolah?.nip) {
-      doc.text(`NIP. ${kepalaSekolah.nip}`, 136, sigY + 24);
+      doc.text(`NIP. ${kepalaSekolah.nip}`, 136, sigY + 20.5);
     }
   }
 }
@@ -958,7 +1023,9 @@ export async function buildStudentRaporPdfDoc(
   nilaiRecords: NilaiRecord[],
   studentRaporExtras: StudentRaporExtras[],
   gradeSettings: GradeSettings,
-  kepalaSekolah?: KepalaSekolah
+  kepalaSekolah?: KepalaSekolah,
+  subjects?: string[],
+  options?: CombinedRaportPdfOptions
 ): Promise<jsPDF> {
   const doc = new jsPDF({orientation: 'portrait', unit: 'mm', format: 'a4'});
   await renderStudentRaportOnDoc(
@@ -969,7 +1036,9 @@ export async function buildStudentRaporPdfDoc(
     nilaiRecords,
     studentRaporExtras,
     gradeSettings,
-    kepalaSekolah
+    kepalaSekolah,
+    subjects,
+    options
   );
   return doc;
 }
@@ -981,7 +1050,9 @@ export async function exportStudentRaporPdf(
   nilaiRecords: NilaiRecord[],
   studentRaporExtras: StudentRaporExtras[],
   gradeSettings: GradeSettings,
-  kepalaSekolah?: KepalaSekolah
+  kepalaSekolah?: KepalaSekolah,
+  subjects?: string[],
+  options?: CombinedRaportPdfOptions
 ) {
   const doc = await buildStudentRaporPdfDoc(
     siswa,
@@ -990,11 +1061,14 @@ export async function exportStudentRaporPdf(
     nilaiRecords,
     studentRaporExtras,
     gradeSettings,
-    kepalaSekolah
+    kepalaSekolah,
+    subjects,
+    options
   );
   const safeName = siswa.nama.replace(/[^a-zA-Z0-9._-]/g, '_');
   const safeTa = period.tahunAjaran.replace('/', '-');
-  doc.save(`Raport_${safeName}_Kls_${siswa.kelas}_${safeTa}_${period.semester}.pdf`);
+  const prefix = options?.filePrefix || 'Raport';
+  doc.save(`${prefix}_${safeName}_Kls_${siswa.kelas}_${safeTa}_${period.semester}.pdf`);
 }
 
 export async function buildClassRaporPdfDoc(
@@ -1004,7 +1078,9 @@ export async function buildClassRaporPdfDoc(
   nilaiRecords: NilaiRecord[],
   studentRaporExtras: StudentRaporExtras[],
   gradeSettings: GradeSettings,
-  kepalaSekolah?: KepalaSekolah
+  kepalaSekolah?: KepalaSekolah,
+  subjects?: string[],
+  options?: CombinedRaportPdfOptions
 ): Promise<jsPDF> {
   const doc = new jsPDF({orientation: 'portrait', unit: 'mm', format: 'a4'});
   for (let i = 0; i < siswas.length; i++) {
@@ -1017,7 +1093,9 @@ export async function buildClassRaporPdfDoc(
       nilaiRecords,
       studentRaporExtras,
       gradeSettings,
-      kepalaSekolah
+      kepalaSekolah,
+      subjects,
+      options
     );
   }
   return doc;
@@ -1031,7 +1109,9 @@ export async function exportClassRaporPdf(
   nilaiRecords: NilaiRecord[],
   studentRaporExtras: StudentRaporExtras[],
   gradeSettings: GradeSettings,
-  kepalaSekolah?: KepalaSekolah
+  kepalaSekolah?: KepalaSekolah,
+  subjects?: string[],
+  options?: CombinedRaportPdfOptions
 ) {
   const doc = await buildClassRaporPdfDoc(
     siswas,
@@ -1040,10 +1120,13 @@ export async function exportClassRaporPdf(
     nilaiRecords,
     studentRaporExtras,
     gradeSettings,
-    kepalaSekolah
+    kepalaSekolah,
+    subjects,
+    options
   );
   const safeTa = period.tahunAjaran.replace('/', '-');
-  doc.save(`Raport_Lengkap_Kelas_${kelas}_${safeTa}_${period.semester}.pdf`);
+  const prefix = options?.filePrefix || 'Raport_Lengkap';
+  doc.save(`${prefix}_Kelas_${kelas}_${safeTa}_${period.semester}.pdf`);
 }
 
 export function buildClassRaporWorkbook(
@@ -1052,14 +1135,15 @@ export function buildClassRaporWorkbook(
   period: EducationPeriod,
   nilaiRecords: NilaiRecord[],
   studentRaporExtras: StudentRaporExtras[],
-  gradeSettings: GradeSettings
+  gradeSettings: GradeSettings,
+  subjects: string[] = DAFTAR_MAPEL
 ): XLSX.WorkBook {
   const nilaiSheetRows: Array<Record<string, string | number>> = [];
   const ekskulSheetRows: Array<Record<string, string | number>> = [];
 
   siswas.forEach((s) => {
     const sNilai = nilaiRecords.filter((n) => n.periodId === period.id && n.siswaId === s.id);
-    DAFTAR_MAPEL.forEach((mapel) => {
+    subjects.forEach((mapel) => {
       const rec = sNilai.find((n) => n.mapel === mapel);
       const kkm = gradeSettings.kkmPerMapel[mapel] ?? 75;
       const avgTugas = rec ? (hitungRataDaftar(rec.tugasList) ?? rec.tugas ?? null) : null;
@@ -1114,7 +1198,8 @@ export function exportClassRaporExcel(
   period: EducationPeriod,
   nilaiRecords: NilaiRecord[],
   studentRaporExtras: StudentRaporExtras[],
-  gradeSettings: GradeSettings
+  gradeSettings: GradeSettings,
+  subjects?: string[]
 ) {
   const wb = buildClassRaporWorkbook(
     kelas,
@@ -1122,8 +1207,203 @@ export function exportClassRaporExcel(
     period,
     nilaiRecords,
     studentRaporExtras,
-    gradeSettings
+    gradeSettings,
+    subjects
   );
   const safeTa = period.tahunAjaran.replace('/', '-');
   XLSX.writeFile(wb, `Rekap_Raport_Kelas_${kelas}_${safeTa}_${period.semester}.xlsx`);
+}
+
+// 8. EKSPOR PROFIL GURU LENGKAP (KHUSUS ADMIN: SATUAN ATAU SEMUA MENJADI SATU PDF)
+async function renderGuruProfileOnDoc(
+  doc: jsPDF,
+  guru: Guru,
+  school: SchoolProfile,
+  periodLabel: string,
+  certificates: GuruCertificate[],
+  kepalaSekolah?: KepalaSekolah
+) {
+  const startY = await drawSchoolHeaderPdf(
+    doc,
+    school,
+    'PROFIL LENGKAP PENDIDIK (GURU)',
+    `Periode Pendidikan: ${periodLabel}`
+  );
+
+  // Foto guru di pojok kanan atas jika ada
+  let headerBlockY = startY + 2;
+  if (guru.foto) {
+    const guruPng = await toPngDataUrl(guru.foto);
+    if (guruPng) {
+      doc.addImage(guruPng, 'PNG', 170, headerBlockY, 24, 24);
+    }
+  }
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.setTextColor(15, 23, 42);
+  doc.text(guru.nama, 14, headerBlockY + 4);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.8);
+  doc.setTextColor(51, 65, 85);
+  doc.text(`NIP: ${guru.nip || '-'}   |   NUPTK: ${guru.nuptk || '-'}`, 14, headerBlockY + 9.5);
+  doc.text(
+    `Jabatan: ${guru.jabatan || '-'}   |   Status: ${guru.statusKepegawaian}`,
+    14,
+    headerBlockY + 14.5
+  );
+  doc.setTextColor(15, 118, 110);
+  doc.setFont('helvetica', 'bold');
+  doc.text(
+    `Mapel Diampu: ${guru.mapelDiampu.join(', ') || '-'} (Kelas ${guru.kelasDiampu.join(', ') || '-'}) · ${guru.jamMengajar} JP/Minggu`,
+    14,
+    headerBlockY + 19.5
+  );
+
+  headerBlockY += 27;
+
+  // A. Identitas Pribadi & Kepegawaian
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.setTextColor(15, 118, 110);
+  doc.text('A. Data Pribadi & Kepegawaian', 14, headerBlockY);
+
+  autoTable(doc, {
+    startY: headerBlockY + 2,
+    head: [['Atribut Data', 'Keterangan']],
+    body: [
+      ['Nama Lengkap & Gelar', guru.nama || '-'],
+      ['NIP / NUPTK', `${guru.nip || '-'} / ${guru.nuptk || '-'}`],
+      ['Tempat, Tanggal Lahir', `${guru.tempatLahir || '-'}, ${formatTanggalId(guru.tanggalLahir)}`],
+      ['Jenis Kelamin / Agama', `${guru.jenisKelamin} / ${guru.agama || '-'}`],
+      ['Alamat Tempat Tinggal', guru.alamat || '-'],
+      ['No. HP / Email', `${guru.noHp || '-'} / ${guru.email || '-'}`],
+      ['Pendidikan Terakhir', guru.pendidikanTerakhir || '-'],
+      ['Status Kepegawaian', guru.statusKepegawaian || '-'],
+      ['Golongan / Pangkat', guru.golonganPangkat || '-'],
+      ['Jabatan', guru.jabatan || '-'],
+      ['Mata Pelajaran Diampu', guru.mapelDiampu.join(', ') || '-'],
+      ['Kelas Diampu & Beban Jam', `Kelas ${guru.kelasDiampu.join(', ') || '-'} (${guru.jamMengajar} JP/minggu)`],
+      ['Tahun Mulai Bertugas', guru.tahunMulaiBertugas || '-'],
+    ],
+    styles: {fontSize: 8, cellPadding: 1.8},
+    headStyles: {fillColor: [15, 118, 110], textColor: 255, fontStyle: 'bold'},
+    alternateRowStyles: {fillColor: [248, 250, 252]},
+    columnStyles: {0: {cellWidth: 58, fontStyle: 'bold'}},
+  });
+
+  let nextY =
+    ((doc as unknown as {lastAutoTable?: {finalY: number}}).lastAutoTable?.finalY || headerBlockY + 75) + 5;
+
+  // B. Identitas Tambahan & Kolom Bebas
+  const extraRows: Array<[string, string]> = [
+    ['NIK', guru.nik || '-'],
+    ['NPWP', guru.npwp || '-'],
+    ['Nomor Rekening', guru.noRekening || '-'],
+    ['Kontak Darurat', guru.kontakDarurat || '-'],
+    ...guru.customFields.map((cf): [string, string] => [cf.label || 'Kolom Tambahan', cf.value || '-']),
+  ];
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.setTextColor(15, 118, 110);
+  doc.text('B. Identitas Tambahan', 14, nextY);
+
+  autoTable(doc, {
+    startY: nextY + 2,
+    head: [['Identitas Tambahan', 'Nilai / Keterangan']],
+    body: extraRows,
+    styles: {fontSize: 8, cellPadding: 1.8},
+    headStyles: {fillColor: [51, 65, 85], textColor: 255, fontStyle: 'bold'},
+    alternateRowStyles: {fillColor: [248, 250, 252]},
+    columnStyles: {0: {cellWidth: 58, fontStyle: 'bold'}},
+  });
+
+  nextY =
+    ((doc as unknown as {lastAutoTable?: {finalY: number}}).lastAutoTable?.finalY || nextY + 35) + 5;
+
+  // C. Sertifikat Prestasi Guru
+  const pageHeight = doc.internal.pageSize.getHeight();
+  if (nextY > pageHeight - 45) {
+    doc.addPage();
+    nextY = 18;
+  }
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.setTextColor(15, 118, 110);
+  doc.text(`C. Sertifikat Prestasi & Penghargaan (${certificates.length})`, 14, nextY);
+
+  autoTable(doc, {
+    startY: nextY + 2,
+    head: [['No', 'Judul Sertifikat / Penghargaan', 'Peringkat', 'Tingkat', 'Tahun', 'Penyelenggara']],
+    body:
+      certificates.length > 0
+        ? certificates.map((c, idx) => [
+            idx + 1,
+            c.judul,
+            c.peringkat,
+            c.tingkat,
+            c.tahun,
+            c.penyelenggara || '-',
+          ])
+        : [['-', 'Belum ada sertifikat prestasi diunggah', '-', '-', '-', '-']],
+    styles: {fontSize: 7.8, cellPadding: 1.8},
+    headStyles: {fillColor: [217, 119, 6], textColor: 255, fontStyle: 'bold'},
+    columnStyles: {0: {halign: 'center', cellWidth: 9}, 4: {halign: 'center', cellWidth: 14}},
+  });
+
+  const sigY =
+    ((doc as unknown as {lastAutoTable?: {finalY: number}}).lastAutoTable?.finalY || nextY + 20) + 8;
+
+  if (sigY <= pageHeight - 22) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.2);
+    doc.setTextColor(30, 41, 59);
+    doc.text(`Besakih, ${formatTanggalId(new Date().toISOString())}`, 136, sigY);
+    doc.text(`Kepala ${school.nama}`, 136, sigY + 4);
+    doc.setFont('helvetica', 'bold');
+    doc.text(kepalaSekolah?.nama || 'Kepala Sekolah', 136, sigY + 18);
+    doc.setFont('helvetica', 'normal');
+    if (kepalaSekolah?.nip) {
+      doc.text(`NIP. ${kepalaSekolah.nip}`, 136, sigY + 21.5);
+    }
+  }
+}
+
+export async function exportSingleGuruPdf(
+  guru: Guru,
+  school: SchoolProfile,
+  periodLabel: string,
+  allCertificates: GuruCertificate[],
+  kepalaSekolah?: KepalaSekolah
+) {
+  const doc = new jsPDF({orientation: 'portrait', unit: 'mm', format: 'a4'});
+  const certs = allCertificates.filter(
+    (c) => (guru.userId && c.userId === guru.userId) || c.guruId === guru.id
+  );
+  await renderGuruProfileOnDoc(doc, guru, school, periodLabel, certs, kepalaSekolah);
+  const safeName = guru.nama.replace(/[^a-zA-Z0-9._-]/g, '_');
+  doc.save(`Profil_Lengkap_Guru_${safeName}.pdf`);
+}
+
+export async function exportAllGurusPdf(
+  gurus: Guru[],
+  school: SchoolProfile,
+  periodLabel: string,
+  allCertificates: GuruCertificate[],
+  kepalaSekolah?: KepalaSekolah
+) {
+  const doc = new jsPDF({orientation: 'portrait', unit: 'mm', format: 'a4'});
+  for (let i = 0; i < gurus.length; i++) {
+    if (i > 0) doc.addPage();
+    const g = gurus[i];
+    const certs = allCertificates.filter(
+      (c) => (g.userId && c.userId === g.userId) || c.guruId === g.id
+    );
+    await renderGuruProfileOnDoc(doc, g, school, periodLabel, certs, kepalaSekolah);
+  }
+  const safePeriod = periodLabel.replace(/[^a-zA-Z0-9._-]/g, '_');
+  doc.save(`Profil_Lengkap_Semua_Guru_${safePeriod}.pdf`);
 }

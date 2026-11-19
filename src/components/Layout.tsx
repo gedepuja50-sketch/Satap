@@ -23,26 +23,34 @@ import {
   X,
 } from 'lucide-react';
 import {useSchool} from '../context/SchoolContext';
-import {MenuKey} from '../types/school';
+import {MenuKey, UserRole} from '../types/school';
 
 interface NavItem {
   key: MenuKey;
   label: string;
   icon: React.ComponentType<{className?: string}>;
-  roles: Array<'ADMIN' | 'GURU'>;
+  roles: UserRole[];
+  requiresSarprasAccess?: boolean;
 }
 
-// Hak akses menu: Admin akses semua menu; Guru akses Beranda, Profil Saya, Nilai Siswa, dan Administrasi Guru
+// Hak akses menu: Admin akses semua; Guru akses Beranda, Profil Saya, Nilai Siswa, Administrasi Guru (+ Sarpras jika ditugaskan);
+// Staf akses Beranda, Data Staf, dan Sarana & Prasarana jika mendapat tugas input data Sarpras.
 const NAV_ITEMS: NavItem[] = [
-  {key: 'beranda', label: 'Beranda', icon: Home, roles: ['ADMIN', 'GURU']},
+  {key: 'beranda', label: 'Beranda', icon: Home, roles: ['ADMIN', 'GURU', 'STAF']},
   {key: 'profil-saya', label: 'Profil Saya', icon: UserCircle2, roles: ['GURU']},
   {key: 'guru', label: 'Guru', icon: Users, roles: ['ADMIN']},
   {key: 'kepala-sekolah', label: 'Kepala Sekolah', icon: UserCheck, roles: ['ADMIN']},
-  {key: 'staf', label: 'Staf', icon: UserCog, roles: ['ADMIN']},
+  {key: 'staf', label: 'Staf', icon: UserCog, roles: ['ADMIN', 'STAF']},
   {key: 'siswa', label: 'Siswa', icon: GraduationCap, roles: ['ADMIN']},
   {key: 'nilai-siswa', label: 'Nilai Siswa', icon: ClipboardList, roles: ['ADMIN', 'GURU']},
   {key: 'administrasi-guru', label: 'Administrasi Guru', icon: FolderKanban, roles: ['ADMIN', 'GURU']},
-  {key: 'sarana-prasarana', label: 'Sarana & Prasarana', icon: Building2, roles: ['ADMIN']},
+  {
+    key: 'sarana-prasarana',
+    label: 'Sarana & Prasarana',
+    icon: Building2,
+    roles: ['ADMIN', 'STAF', 'GURU'],
+    requiresSarprasAccess: true,
+  },
   {key: 'prestasi', label: 'Prestasi', icon: Award, roles: ['ADMIN']},
   {key: 'panel-admin', label: 'Panel Admin', icon: Shield, roles: ['ADMIN']},
   {key: 'pengaturan', label: 'Pengaturan', icon: Settings, roles: ['ADMIN']},
@@ -59,6 +67,7 @@ export const Layout: React.FC<{
     selectedPeriodId,
     setSelectedPeriodId,
     selectedPeriod,
+    setActivePeriod,
     logout,
     theme,
     toggleTheme,
@@ -69,9 +78,13 @@ export const Layout: React.FC<{
   const logoInputRef = useRef<HTMLInputElement | null>(null);
 
   const isAdmin = currentUser?.role === 'ADMIN';
-  const visibleMenus = NAV_ITEMS.filter((item) =>
-    currentUser ? item.roles.includes(currentUser.role) : false
-  );
+  const visibleMenus = NAV_ITEMS.filter((item) => {
+    if (!currentUser) return false;
+    if (item.requiresSarprasAccess) {
+      return isAdmin || Boolean(currentUser.aksesSarpras);
+    }
+    return item.roles.includes(currentUser.role);
+  });
 
   const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -145,7 +158,16 @@ export const Layout: React.FC<{
             {currentUser?.namaLengkap}
           </p>
           <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-            {isAdmin ? 'Administrator Sekolah' : 'Akun Guru'} · @{currentUser?.username}
+            {isAdmin
+              ? 'Administrator Sekolah'
+              : currentUser?.role === 'STAF'
+                ? currentUser.aksesSarpras
+                  ? 'Akun Staf · Input Sarpras'
+                  : 'Akun Staf'
+                : currentUser?.aksesSarpras
+                  ? 'Akun Guru · Input Sarpras'
+                  : 'Akun Guru'}{' '}
+            · @{currentUser?.username}
           </p>
         </div>
         <button
@@ -228,15 +250,26 @@ export const Layout: React.FC<{
               </div>
 
               {isAdmin && (
-                <button
-                  type="button"
-                  onClick={() => logoInputRef.current?.click()}
-                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-medium text-slate-700 dark:text-slate-200 hover:border-teal-600/50 hover:text-teal-700 dark:hover:text-teal-300 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                  title="Unggah gambar baru untuk mengganti logo sekolah"
-                >
-                  <ImagePlus className="w-4 h-4 text-amber-500" />
-                  <span className="hidden md:inline">Ganti Logo</span>
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={() => onSelectMenu('panel-admin')}
+                    className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-2 rounded-xl border border-teal-600/30 bg-teal-50 dark:bg-teal-950/40 text-xs font-semibold text-teal-800 dark:text-teal-300 hover:bg-teal-100 dark:hover:bg-teal-900/60 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                    title="Ganti periode semester / tahun pelajaran di Panel Admin"
+                  >
+                    <CalendarRange className="w-3.5 h-3.5" />
+                    <span>Ganti Periode</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => logoInputRef.current?.click()}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-medium text-slate-700 dark:text-slate-200 hover:border-teal-600/50 hover:text-teal-700 dark:hover:text-teal-300 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                    title="Unggah gambar baru untuk mengganti logo sekolah"
+                  >
+                    <ImagePlus className="w-4 h-4 text-amber-500" />
+                    <span className="hidden md:inline">Ganti Logo</span>
+                  </button>
+                </>
               )}
 
               <button
@@ -252,17 +285,28 @@ export const Layout: React.FC<{
           </div>
 
           {!selectedPeriod.aktif && (
-            <div className="mt-2 px-3 py-1.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 text-xs text-amber-800 dark:text-amber-300 flex items-center justify-between gap-2">
+            <div className="mt-2 px-3 py-1.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 text-xs text-amber-800 dark:text-amber-300 flex flex-wrap items-center justify-between gap-2">
               <span>
-                Anda sedang melihat data arsip historis: <strong>{selectedPeriod.label}</strong>
+                Anda sedang melihat data periode: <strong>{selectedPeriod.label}</strong>
               </span>
-              <button
-                type="button"
-                onClick={() => setSelectedPeriodId(state.activePeriodId)}
-                className="font-semibold underline hover:text-amber-950 dark:hover:text-amber-100 shrink-0 cursor-pointer"
-              >
-                Kembali ke Periode Aktif
-              </button>
+              <div className="flex items-center gap-3 shrink-0">
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => setActivePeriod(selectedPeriod.id)}
+                    className="px-2.5 py-0.5 rounded-lg bg-teal-700 hover:bg-teal-800 text-white font-semibold cursor-pointer"
+                  >
+                    Jadikan Periode Aktif
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setSelectedPeriodId(state.activePeriodId)}
+                  className="font-semibold underline hover:text-amber-950 dark:hover:text-amber-100 cursor-pointer"
+                >
+                  Kembali ke Periode Aktif
+                </button>
+              </div>
             </div>
           )}
         </header>

@@ -1,11 +1,25 @@
 // Halaman 5: Data Siswa Kelas 7, 8, 9 per Periode Pendidikan - Filter, Pencarian, Tambah/Edit/Hapus, dan Download PDF
 
 import React, {useMemo, useState} from 'react';
-import {Download, Edit3, GraduationCap, Plus, Search, Trash2} from 'lucide-react';
+import {
+  AlertCircle,
+  CheckCircle2,
+  Clock,
+  Download,
+  Edit3,
+  GraduationCap,
+  Plus,
+  Search,
+  Trash2,
+} from 'lucide-react';
 import {useSchool} from '../context/SchoolContext';
 import {KelasLevel, Siswa} from '../types/school';
 import {exportSiswaPdf} from '../utils/exportUtils';
-import {formatTanggalId} from '../utils/gradeUtils';
+import {
+  evaluateStudentPromotionStatus,
+  formatTanggalId,
+  StudentPromotionResult,
+} from '../utils/gradeUtils';
 import {EmptyState, Modal} from '../components/ui/AvatarAndModal';
 
 const emptySiswa = (kelas: KelasLevel, periodId: string): Siswa => ({
@@ -51,6 +65,38 @@ export const SiswaPage: React.FC = () => {
     });
     return map;
   }, [periodSiswas]);
+
+  const promotionByStudent = useMemo(() => {
+    const map = new Map<string, StudentPromotionResult>();
+    periodSiswas.forEach((s) => {
+      map.set(
+        s.id,
+        evaluateStudentPromotionStatus(
+          s,
+          selectedPeriod,
+          state.subjects,
+          state.nilaiRecords,
+          state.gradeSettings
+        )
+      );
+    });
+    return map;
+  }, [periodSiswas, selectedPeriod, state.subjects, state.nilaiRecords, state.gradeSettings]);
+
+  const classPromotionSummary = useMemo(() => {
+    const classStudents = periodSiswas.filter((s) => s.kelas === selectedKelas);
+    let qualified = 0;
+    let belowKkm = 0;
+    let incomplete = 0;
+    classStudents.forEach((s) => {
+      const st = promotionByStudent.get(s.id);
+      if (!st) return;
+      if (st.code === 'LULUS' || st.code === 'NAIK_KELAS') qualified++;
+      else if (st.code === 'BELUM_MEMENUHI') belowKkm++;
+      else if (st.code === 'BELUM_LENGKAP') incomplete++;
+    });
+    return {total: classStudents.length, qualified, belowKkm, incomplete};
+  }, [periodSiswas, selectedKelas, promotionByStudent]);
 
   const filteredSiswas = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -189,6 +235,49 @@ export const SiswaPage: React.FC = () => {
         </div>
       </div>
 
+      {/* Banner Status Kenaikan Kelas / Kelulusan Otomatis (Khusus Semester Genap) */}
+      {selectedPeriod.semester === 'Genap' ? (
+        <div className="rounded-2xl border border-emerald-200 dark:border-emerald-800/70 bg-emerald-50/70 dark:bg-emerald-950/30 p-4 flex flex-col md:flex-row md:items-center justify-between gap-3">
+          <div className="flex items-start gap-2.5 text-xs sm:text-sm text-emerald-950 dark:text-emerald-100">
+            <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-display font-bold">
+                Evaluasi Otomatis Akhir Tahun Pelajaran (Semester Genap)
+              </p>
+              <p className="text-xs text-emerald-800 dark:text-emerald-300 mt-0.5">
+                Siswa Kelas {selectedKelas} otomatis dinyatakan{' '}
+                <strong>{selectedKelas === '9' ? 'LULUS' : `NAIK KE KELAS ${Number(selectedKelas) + 1}`}</strong>{' '}
+                apabila seluruh {state.subjects.length} mata pelajaran telah memenuhi KKM.
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-xs font-semibold shrink-0">
+            <span className="px-3 py-1 rounded-xl bg-emerald-600 text-white font-mono-num">
+              {selectedKelas === '9' ? 'Lulus' : 'Naik Kelas'}: {classPromotionSummary.qualified}
+            </span>
+            {classPromotionSummary.belowKkm > 0 && (
+              <span className="px-3 py-1 rounded-xl bg-red-600 text-white font-mono-num">
+                Belum Memenuhi: {classPromotionSummary.belowKkm}
+              </span>
+            )}
+            {classPromotionSummary.incomplete > 0 && (
+              <span className="px-3 py-1 rounded-xl bg-amber-500 text-white font-mono-num">
+                Belum Lengkap: {classPromotionSummary.incomplete}
+              </span>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/60 px-4 py-3 flex items-center gap-2.5 text-xs text-slate-600 dark:text-slate-300">
+          <Clock className="w-4 h-4 text-teal-700 dark:text-teal-400 shrink-0" />
+          <p>
+            Periode aktif yang sedang dilihat adalah <strong>Semester Ganjil</strong>. Status{' '}
+            <strong>Naik Kelas / Lulus</strong> tidak ditetapkan di Semester Ganjil dan akan otomatis aktif pada{' '}
+            <strong>Semester Genap</strong> (akhir tahun pelajaran).
+          </p>
+        </div>
+      )}
+
       {/* Tabel Data Siswa */}
       {filteredSiswas.length === 0 ? (
         <EmptyState
@@ -211,11 +300,14 @@ export const SiswaPage: React.FC = () => {
                   <th className="py-3 px-3.5">Alamat</th>
                   <th className="py-3 px-3.5">Orang Tua / Wali</th>
                   <th className="py-3 px-3.5">No. HP</th>
+                  <th className="py-3 px-3.5">Status Kenaikan / Kelulusan</th>
                   <th className="py-3 px-3.5 text-right">Aksi</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {filteredSiswas.map((s, idx) => (
+                {filteredSiswas.map((s, idx) => {
+                  const promo = promotionByStudent.get(s.id);
+                  return (
                   <tr
                     key={s.id}
                     className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors"
@@ -240,6 +332,27 @@ export const SiswaPage: React.FC = () => {
                     </td>
                     <td className="py-3 px-3.5 font-mono-num text-slate-600 dark:text-slate-400 whitespace-nowrap">
                       {s.noHpOrtu}
+                    </td>
+                    <td className="py-3 px-3.5 whitespace-nowrap" title={promo?.detail}>
+                      {promo?.code === 'LULUS' || promo?.code === 'NAIK_KELAS' ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 text-xs font-bold">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          {promo.label}
+                        </span>
+                      ) : promo?.code === 'BELUM_MEMENUHI' ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-red-100 dark:bg-red-950/60 text-red-700 dark:text-red-300 text-xs font-semibold">
+                          <AlertCircle className="w-3.5 h-3.5" />
+                          {promo.shortLabel}
+                        </span>
+                      ) : promo?.code === 'BELUM_LENGKAP' ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 text-xs font-medium">
+                          {promo.shortLabel}
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-xs font-medium">
+                          {promo?.shortLabel || 'Proses (Ganjil)'}
+                        </span>
+                      )}
                     </td>
                     <td className="py-3 px-3.5 text-right whitespace-nowrap">
                       <button
@@ -268,7 +381,8 @@ export const SiswaPage: React.FC = () => {
                       </button>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

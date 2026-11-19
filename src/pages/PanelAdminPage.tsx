@@ -3,8 +3,11 @@
 import React, {useMemo, useState} from 'react';
 import {
   Archive,
+  ArrowRight,
   Award,
+  BookMarked,
   BookOpenCheck,
+  Building2,
   CalendarRange,
   CheckCircle2,
   DatabaseBackup,
@@ -13,19 +16,20 @@ import {
   FileSpreadsheet,
   History,
   KeyRound,
+  LayoutTemplate,
   Plus,
   RotateCcw,
   Shield,
   Trash2,
   Upload,
   UserCheck,
+  Users,
   UserX,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import {useSchool} from '../context/SchoolContext';
 import {localStorageAdapter} from '../services/storageAdapter';
 import {
-  DAFTAR_MAPEL,
   KATEGORI_ADMIN_GURU_DEFAULT,
   KelasLevel,
   SemesterType,
@@ -43,25 +47,45 @@ import {
   RekapNilaiRow,
 } from '../utils/exportUtils';
 import {
+  evaluateStudentPromotionStatus,
   formatDateTimeId,
+  getNextEducationPeriodInfo,
   getPredikatNilai,
   hitungRataDaftar,
   hitungRataRata,
 } from '../utils/gradeUtils';
+import {LoginConfigEditor} from '../components/LoginConfigEditor';
 import {Modal} from '../components/ui/AvatarAndModal';
 
-type AdminTab = 'periode' | 'rekap-nilai' | 'rapor' | 'pusat-arsip' | 'akun' | 'log' | 'backup';
+type AdminTab =
+  | 'periode'
+  | 'mapel'
+  | 'rekap-nilai'
+  | 'rapor'
+  | 'tampilan-login'
+  | 'pusat-arsip'
+  | 'akun'
+  | 'log'
+  | 'backup';
 
 export const PanelAdminPage: React.FC = () => {
   const {
     state,
     currentUser,
+    activePeriod,
+    selectedPeriod,
     selectedPeriodId,
     setSelectedPeriodId,
+    periodGurus,
     createPeriod,
     setActivePeriod,
     deletePeriod,
+    addSubject,
+    renameSubject,
+    deleteSubject,
+    updateSubjectTeachers,
     saveAccount,
+    toggleSarprasAccess,
     deleteAccount,
     restoreFromBackup,
     resetAllToSeed,
@@ -72,6 +96,56 @@ export const PanelAdminPage: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<AdminTab>('periode');
 
+  // === TAB: MATA PELAJARAN & GURU PENGAMPU ===
+  const [addMapelOpen, setAddMapelOpen] = useState(false);
+  const [newMapelName, setNewMapelName] = useState('');
+  const [newMapelKkm, setNewMapelKkm] = useState(75);
+  const [newMapelGuruIds, setNewMapelGuruIds] = useState<string[]>([]);
+  const [editMapelTarget, setEditMapelTarget] = useState<{
+    oldName: string;
+    name: string;
+    kkm: number;
+  } | null>(null);
+  const [assignGuruTarget, setAssignGuruTarget] = useState<{
+    mapel: string;
+    guruIds: string[];
+  } | null>(null);
+
+  const handleOpenAddMapel = () => {
+    setNewMapelName('');
+    setNewMapelKkm(75);
+    setNewMapelGuruIds([]);
+    setAddMapelOpen(true);
+  };
+
+  const handleCreateMapel = (e: React.FormEvent) => {
+    e.preventDefault();
+    const res = addSubject(newMapelName, newMapelKkm, newMapelGuruIds);
+    if (!res.ok) {
+      showToast(res.message || 'Gagal menambah mata pelajaran.', 'error');
+      return;
+    }
+    setAddMapelOpen(false);
+  };
+
+  const handleUpdateMapel = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editMapelTarget) return;
+    const res = renameSubject(editMapelTarget.oldName, editMapelTarget.name, editMapelTarget.kkm);
+    if (!res.ok) {
+      showToast(res.message || 'Gagal memperbarui mata pelajaran.', 'error');
+      return;
+    }
+    setEditMapelTarget(null);
+  };
+
+  const handleSaveAssignGuru = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!assignGuruTarget) return;
+    updateSubjectTeachers(assignGuruTarget.mapel, assignGuruTarget.guruIds);
+    setAssignGuruTarget(null);
+  };
+
   // === TAB 0: PERIODE PENDIDIKAN ===
   const [periodModalOpen, setPeriodModalOpen] = useState(false);
   const [newTahunAjaran, setNewTahunAjaran] = useState('2027/2028');
@@ -79,6 +153,56 @@ export const PanelAdminPage: React.FC = () => {
   const [setAsActive, setSetAsActive] = useState(true);
   const [copyFromPeriodId, setCopyFromPeriodId] = useState<string>(state.activePeriodId);
   const [promoteClasses, setPromoteClasses] = useState(true);
+
+  const nextPeriodInfo = useMemo(
+    () => getNextEducationPeriodInfo(activePeriod),
+    [activePeriod]
+  );
+
+  const existingNextPeriod = useMemo(
+    () =>
+      state.periods.find(
+        (p) =>
+          p.tahunAjaran === nextPeriodInfo.tahunAjaran &&
+          p.semester === nextPeriodInfo.semester
+      ),
+    [state.periods, nextPeriodInfo]
+  );
+
+  const rolloverPreview = useMemo(() => {
+    if (activePeriod.semester !== 'Genap') return null;
+    const siswasInActive = state.siswas.filter((s) => s.periodId === activePeriod.id);
+    let naikKelas = 0;
+    let lulus = 0;
+    let tetap = 0;
+    siswasInActive.forEach((s) => {
+      const res = evaluateStudentPromotionStatus(
+        s,
+        activePeriod,
+        state.subjects,
+        state.nilaiRecords,
+        state.gradeSettings
+      );
+      if (res.code === 'LULUS') lulus += 1;
+      else if (res.code === 'NAIK_KELAS') naikKelas += 1;
+      else tetap += 1;
+    });
+    return {total: siswasInActive.length, naikKelas, lulus, tetap};
+  }, [activePeriod, state.siswas, state.subjects, state.nilaiRecords, state.gradeSettings]);
+
+  const handleAdvanceSemester = () => {
+    if (existingNextPeriod) {
+      setActivePeriod(existingNextPeriod.id);
+      setSelectedPeriodId(existingNextPeriod.id);
+      return;
+    }
+    setNewTahunAjaran(nextPeriodInfo.tahunAjaran);
+    setNewSemester(nextPeriodInfo.semester);
+    setCopyFromPeriodId(activePeriod.id);
+    setPromoteClasses(nextPeriodInfo.isYearRollover);
+    setSetAsActive(true);
+    setPeriodModalOpen(true);
+  };
 
   const handleCreatePeriod = (e: React.FormEvent) => {
     e.preventDefault();
@@ -121,12 +245,12 @@ export const PanelAdminPage: React.FC = () => {
   }, [pengampuFilter, rekapPeriodGurus, state.gurus]);
 
   const activeMapels = useMemo(() => {
-    let base = mapelFilter === 'ALL' ? DAFTAR_MAPEL : [mapelFilter];
+    let base = mapelFilter === 'ALL' ? state.subjects : [mapelFilter];
     if (selectedPengampuGuru) {
       base = base.filter((m) => selectedPengampuGuru.mapelDiampu.includes(m));
     }
     return base;
-  }, [mapelFilter, selectedPengampuGuru]);
+  }, [mapelFilter, selectedPengampuGuru, state.subjects]);
 
   const rekapRows: RekapNilaiRow[] = useMemo(() => {
     const targetSiswas = state.siswas
@@ -242,7 +366,7 @@ export const PanelAdminPage: React.FC = () => {
     const recs = state.nilaiRecords.filter(
       (n) => n.periodId === raporPeriodObj.id && n.siswaId === activeRaporSiswa.id
     );
-    return DAFTAR_MAPEL.map((mapel, idx) => {
+    return state.subjects.map((mapel, idx) => {
       const rec = recs.find((n) => n.mapel === mapel);
       const kkm = state.gradeSettings.kkmPerMapel[mapel] ?? 75;
       const avgTugas = rec ? (hitungRataDaftar(rec.tugasList) ?? rec.tugas ?? null) : null;
@@ -262,7 +386,7 @@ export const PanelAdminPage: React.FC = () => {
         catatanGuru: rec?.catatanGuru || '',
       };
     });
-  }, [activeRaporSiswa, state.nilaiRecords, state.gradeSettings, raporPeriodObj.id]);
+  }, [activeRaporSiswa, state.nilaiRecords, state.gradeSettings, state.subjects, raporPeriodObj.id]);
 
   const handleDownloadSingleRaporPdf = async () => {
     if (!activeRaporSiswa) return;
@@ -275,7 +399,8 @@ export const PanelAdminPage: React.FC = () => {
         state.nilaiRecords,
         state.studentRaporExtras,
         state.gradeSettings,
-        state.kepalaSekolah
+        state.kepalaSekolah,
+        state.subjects
       );
       addLog(
         'EXPORT',
@@ -300,7 +425,8 @@ export const PanelAdminPage: React.FC = () => {
         state.nilaiRecords,
         state.studentRaporExtras,
         state.gradeSettings,
-        state.kepalaSekolah
+        state.kepalaSekolah,
+        state.subjects
       );
       addLog(
         'EXPORT',
@@ -321,7 +447,8 @@ export const PanelAdminPage: React.FC = () => {
       raporPeriodObj,
       state.nilaiRecords,
       state.studentRaporExtras,
-      state.gradeSettings
+      state.gradeSettings,
+      state.subjects
     );
     addLog(
       'EXPORT',
@@ -394,6 +521,9 @@ export const PanelAdminPage: React.FC = () => {
     namaLengkap: '',
     active: true,
     guruId: '',
+    stafId: '',
+    aksesSarpras: false,
+    tugasTambahan: '',
   });
 
   const openAddAccount = () => {
@@ -406,13 +536,21 @@ export const PanelAdminPage: React.FC = () => {
       namaLengkap: '',
       active: true,
       guruId: state.gurus[0]?.id || '',
+      stafId: state.stafs[0]?.id || '',
+      aksesSarpras: false,
+      tugasTambahan: '',
     });
     setAccModalOpen(true);
   };
 
   const openEditAccount = (acc: UserAccount) => {
     setIsNewAcc(false);
-    setAccForm({...acc});
+    setAccForm({
+      ...acc,
+      stafId: acc.stafId || '',
+      aksesSarpras: Boolean(acc.aksesSarpras),
+      tugasTambahan: acc.tugasTambahan || '',
+    });
     setAccModalOpen(true);
   };
 
@@ -429,11 +567,17 @@ export const PanelAdminPage: React.FC = () => {
       showToast('Username sudah digunakan akun lain.', 'error');
       return;
     }
+    const hasSarpras = accForm.role === 'ADMIN' ? true : Boolean(accForm.aksesSarpras);
     saveAccount(
       {
         ...accForm,
         username: accForm.username.trim(),
         guruId: accForm.role === 'GURU' ? accForm.guruId : undefined,
+        stafId: accForm.role === 'STAF' ? accForm.stafId : undefined,
+        aksesSarpras: hasSarpras,
+        tugasTambahan:
+          accForm.tugasTambahan?.trim() ||
+          (accForm.role !== 'ADMIN' && hasSarpras ? 'Input Data Sarana & Prasarana Sekolah' : undefined),
       },
       isNewAcc
     );
@@ -503,8 +647,10 @@ export const PanelAdminPage: React.FC = () => {
         {(
           [
             {key: 'periode', label: 'Periode Pendidikan', icon: CalendarRange},
+            {key: 'mapel', label: 'Mata Pelajaran', icon: BookMarked},
             {key: 'rekap-nilai', label: 'Rekap Semua Nilai', icon: Award},
             {key: 'rapor', label: 'Raport Siswa', icon: BookOpenCheck},
+            {key: 'tampilan-login', label: 'Tampilan Login', icon: LayoutTemplate},
             {key: 'pusat-arsip', label: 'Pusat Arsip (ZIP)', icon: Archive},
             {key: 'akun', label: 'Manajemen Akun', icon: KeyRound},
             {key: 'log', label: 'Log Aktivitas', icon: History},
@@ -546,13 +692,66 @@ export const PanelAdminPage: React.FC = () => {
             <button
               type="button"
               onClick={() => {
-                setCopyFromPeriodId(state.activePeriodId);
+                setNewTahunAjaran(nextPeriodInfo.tahunAjaran);
+                setNewSemester(nextPeriodInfo.semester);
+                setCopyFromPeriodId(activePeriod.id);
+                setPromoteClasses(nextPeriodInfo.isYearRollover);
+                setSetAsActive(true);
                 setPeriodModalOpen(true);
               }}
               className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-sm font-semibold cursor-pointer self-start"
             >
               <Plus className="w-4 h-4" />
               Buat Periode Baru
+            </button>
+          </div>
+
+          {/* Kartu Pergantian Semester & Tahun Pelajaran Berikutnya */}
+          <div className="rounded-2xl border border-teal-200 dark:border-teal-800/70 bg-gradient-to-br from-teal-50/80 to-white dark:from-teal-950/30 dark:to-slate-900 p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div className="space-y-1.5">
+              <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-teal-800 dark:text-teal-300">
+                <CalendarRange className="w-4 h-4" />
+                <span>Pergantian Semester &amp; Tahun Pelajaran</span>
+                <span className="font-mono-num text-slate-500 dark:text-slate-400">
+                  · Aktif: {activePeriod.label}
+                </span>
+              </div>
+              <h3 className="text-base font-display font-bold text-slate-900 dark:text-slate-100">
+                {activePeriod.label} <ArrowRight className="inline w-4 h-4 mx-1 text-teal-600" />{' '}
+                {nextPeriodInfo.label}
+              </h3>
+              {nextPeriodInfo.isYearRollover ? (
+                <p className="text-xs text-slate-600 dark:text-slate-300 max-w-2xl">
+                  Pergantian dari <strong>Semester Genap</strong> ke Tahun Ajaran baru secara otomatis mengevaluasi nilai seluruh mapel siswa: siswa Kelas 7 &amp; 8 yang memenuhi KKM otomatis naik kelas, Kelas 9 yang memenuhi syarat dinyatakan <strong>Lulus</strong>, dan yang belum memenuhi KKM tetap di kelasnya.
+                </p>
+              ) : (
+                <p className="text-xs text-slate-600 dark:text-slate-300 max-w-2xl">
+                  Pergantian dari <strong>Semester Ganjil</strong> ke <strong>Semester Genap</strong> pada tahun ajaran yang sama. Seluruh data guru dan siswa akan disalin tanpa perubahan tingkat kelas.
+                </p>
+              )}
+              {rolloverPreview && (
+                <div className="pt-1 flex flex-wrap items-center gap-3 text-xs font-mono-num">
+                  <span className="text-emerald-700 dark:text-emerald-400 font-semibold">
+                    Naik Kelas (7→8 / 8→9): {rolloverPreview.naikKelas}
+                  </span>
+                  <span className="text-teal-700 dark:text-teal-400 font-semibold">
+                    Lulus (Kelas 9): {rolloverPreview.lulus}
+                  </span>
+                  <span className="text-amber-700 dark:text-amber-400 font-semibold">
+                    Tetap / Belum Memenuhi: {rolloverPreview.tetap}
+                  </span>
+                </div>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={handleAdvanceSemester}
+              className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-sm font-semibold cursor-pointer shrink-0 shadow-sm"
+            >
+              <ArrowRight className="w-4 h-4" />
+              {existingNextPeriod
+                ? `Aktifkan ${existingNextPeriod.label}`
+                : `Lanjut ke ${nextPeriodInfo.label}`}
             </button>
           </div>
 
@@ -663,6 +862,133 @@ export const PanelAdminPage: React.FC = () => {
         </div>
       )}
 
+      {/* KONTEN TAB: MATA PELAJARAN & GURU PENGAMPU */}
+      {activeTab === 'mapel' && (
+        <div className="space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h2 className="text-base font-display font-semibold text-slate-900 dark:text-slate-100">
+                Daftar Mata Pelajaran &amp; Guru Pengampu ({selectedPeriod.label})
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Tambahkan mata pelajaran baru sesuai kebutuhan sekolah dan lihat atau tetapkan guru yang mengampu setiap mata pelajaran.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleOpenAddMapel}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-sm font-semibold cursor-pointer self-start"
+            >
+              <Plus className="w-4 h-4" />
+              Tambah Mata Pelajaran
+            </button>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-xs font-semibold text-slate-600 dark:text-slate-300">
+                    <th className="py-3 px-4 text-center w-12">No</th>
+                    <th className="py-3 px-4">Nama Mata Pelajaran</th>
+                    <th className="py-3 px-3 text-center w-24">KKM</th>
+                    <th className="py-3 px-4">Guru Pengampu ({selectedPeriod.label})</th>
+                    <th className="py-3 px-4 text-right">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {state.subjects.map((mapel, idx) => {
+                    const pengampus = periodGurus.filter((g) => g.mapelDiampu.includes(mapel));
+                    const kkm = state.gradeSettings.kkmPerMapel[mapel] ?? 75;
+                    return (
+                      <tr key={mapel} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
+                        <td className="py-3 px-4 text-center font-mono-num text-xs text-slate-500">
+                          {idx + 1}
+                        </td>
+                        <td className="py-3 px-4 font-semibold text-slate-900 dark:text-slate-100">
+                          {mapel}
+                        </td>
+                        <td className="py-3 px-3 text-center font-mono-num font-semibold text-teal-700 dark:text-teal-400">
+                          {kkm}
+                        </td>
+                        <td className="py-3 px-4">
+                          {pengampus.length === 0 ? (
+                            <span className="text-xs italic text-amber-600 dark:text-amber-400">
+                              Belum ada guru pengampu
+                            </span>
+                          ) : (
+                            <div className="flex flex-wrap gap-1.5">
+                              {pengampus.map((g) => (
+                                <span
+                                  key={g.id}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-teal-50 dark:bg-teal-950/50 border border-teal-200 dark:border-teal-800/70 text-xs font-medium text-teal-800 dark:text-teal-300"
+                                >
+                                  <Users className="w-3 h-3 shrink-0" />
+                                  {g.nama}
+                                  {g.kelasDiampu.length > 0 && (
+                                    <span className="text-[11px] opacity-75">
+                                      (Kls {g.kelasDiampu.join(', ')})
+                                    </span>
+                                  )}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-3 px-4 text-right whitespace-nowrap space-x-1">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setAssignGuruTarget({
+                                mapel,
+                                guruIds: pengampus.map((g) => g.id),
+                              })
+                            }
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:border-teal-600/60 text-xs font-semibold text-teal-700 dark:text-teal-400 cursor-pointer"
+                            title="Atur guru pengampu mata pelajaran ini"
+                          >
+                            <Users className="w-3.5 h-3.5" />
+                            Atur Guru
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setEditMapelTarget({
+                                oldName: mapel,
+                                name: mapel,
+                                kkm,
+                              })
+                            }
+                            className="p-1.5 rounded-lg text-slate-500 hover:text-teal-700 hover:bg-slate-100 dark:hover:bg-slate-800"
+                            title="Ubah nama mapel atau KKM"
+                          >
+                            <Edit3 className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              confirmDelete(
+                                'Hapus Mata Pelajaran?',
+                                `Mata pelajaran "${mapel}" akan dihapus dari daftar pelajaran aktif dan daftar pengampuan guru.`,
+                                () => deleteSubject(mapel)
+                              )
+                            }
+                            className="p-1.5 rounded-lg text-slate-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30"
+                            title="Hapus mata pelajaran"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* KONTEN TAB 1: REKAP SEMUA NILAI */}
       {activeTab === 'rekap-nilai' && (
         <div className="space-y-4">
@@ -699,8 +1025,8 @@ export const PanelAdminPage: React.FC = () => {
                 aria-label="Filter mata pelajaran"
                 className="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs sm:text-sm font-medium"
               >
-                <option value="ALL">Semua Mata Pelajaran (12)</option>
-                {DAFTAR_MAPEL.map((m) => (
+                <option value="ALL">Semua Mata Pelajaran ({state.subjects.length})</option>
+                {state.subjects.map((m) => (
                   <option key={m} value={m}>
                     {m}
                   </option>
@@ -1120,6 +1446,16 @@ export const PanelAdminPage: React.FC = () => {
         </div>
       )}
 
+      {/* KONTEN TAB: TAMPILAN & CATATAN HALAMAN LOGIN */}
+      {activeTab === 'tampilan-login' && (
+        <div className="space-y-4">
+          <div className="rounded-2xl border border-teal-200 dark:border-teal-900/60 bg-teal-50/70 dark:bg-teal-950/30 px-4 py-3 text-xs text-teal-900 dark:text-teal-200">
+            Perubahan pada isian menu maupun catatan di bawah ini akan langsung tampil pada halaman Login saat pengguna mengakses sistem.
+          </div>
+          <LoginConfigEditor />
+        </div>
+      )}
+
       {/* KONTEN TAB 2: PUSAT ARSIP ZIP HISTORIS */}
       {activeTab === 'pusat-arsip' && (
         <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 max-w-3xl space-y-5">
@@ -1262,6 +1598,7 @@ export const PanelAdminPage: React.FC = () => {
                     <th className="py-3 px-4">Username</th>
                     <th className="py-3 px-4">Nama Lengkap</th>
                     <th className="py-3 px-4">Peran</th>
+                    <th className="py-3 px-4">Tugas Khusus (Sarpras)</th>
                     <th className="py-3 px-4">Status</th>
                     <th className="py-3 px-4 text-right">Aksi</th>
                   </tr>
@@ -1269,12 +1606,42 @@ export const PanelAdminPage: React.FC = () => {
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                   {state.accounts.map((acc) => {
                     const isSelf = acc.id === currentUser.id;
+                    const linkedStaf = acc.stafId ? state.stafs.find((s) => s.id === acc.stafId) : undefined;
                     return (
                       <tr key={acc.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
                         <td className="py-3 px-4 font-mono-num font-semibold">{acc.username}</td>
-                        <td className="py-3 px-4">{acc.namaLengkap}</td>
-                        <td className="py-3 px-4 text-xs font-semibold text-teal-700 dark:text-teal-400">
-                          {acc.role}
+                        <td className="py-3 px-4">
+                          <p className="font-medium text-slate-900 dark:text-slate-100">{acc.namaLengkap}</p>
+                          {linkedStaf && (
+                            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                              Staf: {linkedStaf.jabatan}
+                            </p>
+                          )}
+                        </td>
+                        <td className="py-3 px-4 text-xs font-semibold">
+                          <span
+                            className={`inline-block px-2 py-0.5 rounded-lg ${
+                              acc.role === 'ADMIN'
+                                ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
+                                : acc.role === 'STAF'
+                                  ? 'bg-sky-100 text-sky-800 dark:bg-sky-950/60 dark:text-sky-300'
+                                  : 'bg-teal-100 text-teal-800 dark:bg-teal-950/60 dark:text-teal-300'
+                            }`}
+                          >
+                            {acc.role}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4 text-xs">
+                          {acc.role === 'ADMIN' ? (
+                            <span className="text-slate-500 dark:text-slate-400 font-medium">Akses Penuh</span>
+                          ) : acc.aksesSarpras ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-semibold">
+                              <Building2 className="w-3 h-3" />
+                              Input Sarpras
+                            </span>
+                          ) : (
+                            <span className="text-slate-400">-</span>
+                          )}
                         </td>
                         <td className="py-3 px-4 text-xs font-semibold">
                           {acc.active ? (
@@ -1284,10 +1651,28 @@ export const PanelAdminPage: React.FC = () => {
                           )}
                         </td>
                         <td className="py-3 px-4 text-right whitespace-nowrap space-x-1">
+                          {acc.role !== 'ADMIN' && (
+                            <button
+                              type="button"
+                              onClick={() => toggleSarprasAccess(acc.id)}
+                              className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                                acc.aksesSarpras
+                                  ? 'text-emerald-700 bg-emerald-50 hover:bg-emerald-100 dark:text-emerald-300 dark:bg-emerald-950/40'
+                                  : 'text-slate-500 hover:text-teal-700 hover:bg-slate-100 dark:hover:bg-slate-800'
+                              }`}
+                              title={
+                                acc.aksesSarpras
+                                  ? 'Cabut tugas input Sarana & Prasarana'
+                                  : 'Berikan tugas input Sarana & Prasarana'
+                              }
+                            >
+                              <Building2 className="w-4 h-4" />
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => openEditAccount(acc)}
-                            className="p-1.5 rounded-lg text-slate-500 hover:text-teal-700 hover:bg-slate-100 dark:hover:bg-slate-800"
+                            className="p-1.5 rounded-lg text-slate-500 hover:text-teal-700 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
                             title="Ubah akun / reset password"
                           >
                             <Edit3 className="w-4 h-4" />
@@ -1297,7 +1682,7 @@ export const PanelAdminPage: React.FC = () => {
                               <button
                                 type="button"
                                 onClick={() => saveAccount({...acc, active: !acc.active}, false)}
-                                className="p-1.5 rounded-lg text-slate-500 hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950/30"
+                                className="p-1.5 rounded-lg text-slate-500 hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950/30 cursor-pointer"
                                 title={acc.active ? 'Nonaktifkan akun' : 'Aktifkan akun'}
                               >
                                 {acc.active ? <UserX className="w-4 h-4" /> : <UserCheck className="w-4 h-4" />}
@@ -1311,7 +1696,7 @@ export const PanelAdminPage: React.FC = () => {
                                     () => deleteAccount(acc.id)
                                   )
                                 }
-                                className="p-1.5 rounded-lg text-slate-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30"
+                                className="p-1.5 rounded-lg text-slate-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 cursor-pointer"
                                 title="Hapus akun"
                               >
                                 <Trash2 className="w-4 h-4" />
@@ -1490,7 +1875,8 @@ export const PanelAdminPage: React.FC = () => {
                 className="mt-0.5 rounded border-slate-300 text-teal-700"
               />
               <span>
-                Naikkan kelas siswa secara otomatis saat disalin (Kelas 7 → 8, Kelas 8 → 9, Kelas 9 lulus).
+                Evaluasi &amp; naikkan kelas siswa otomatis saat disalin dari{' '}
+                <strong>Semester Genap</strong> (Kelas 7 → 8, Kelas 8 → 9, Kelas 9 lulus jika seluruh nilai mapel memenuhi KKM; hanya berlaku dari Semester Genap).
               </span>
             </label>
           )}
@@ -1565,10 +1951,25 @@ export const PanelAdminPage: React.FC = () => {
             <label className="block text-xs font-semibold mb-1">Peran</label>
             <select
               value={accForm.role}
-              onChange={(e) => setAccForm({...accForm, role: e.target.value as UserRole})}
+              onChange={(e) => {
+                const nextRole = e.target.value as UserRole;
+                setAccForm({
+                  ...accForm,
+                  role: nextRole,
+                  password: isNewAcc
+                    ? nextRole === 'STAF'
+                      ? 'staf123'
+                      : nextRole === 'GURU'
+                        ? 'guru123'
+                        : 'admin123'
+                    : accForm.password,
+                  aksesSarpras: nextRole === 'STAF' ? true : accForm.aksesSarpras,
+                });
+              }}
               className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-sm"
             >
               <option value="GURU">GURU</option>
+              <option value="STAF">STAF (Tenaga Kependidikan)</option>
               <option value="ADMIN">ADMIN</option>
             </select>
           </div>
@@ -1596,6 +1997,71 @@ export const PanelAdminPage: React.FC = () => {
               </select>
             </div>
           )}
+          {accForm.role === 'STAF' && (
+            <div>
+              <label className="block text-xs font-semibold mb-1">Tautkan ke Data Staf</label>
+              <select
+                value={accForm.stafId || ''}
+                onChange={(e) => {
+                  const st = state.stafs.find((x) => x.id === e.target.value);
+                  setAccForm({
+                    ...accForm,
+                    stafId: e.target.value,
+                    namaLengkap: accForm.namaLengkap || st?.nama || '',
+                  });
+                }}
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-sm"
+              >
+                <option value="">-- Pilih Data Staf --</option>
+                {state.stafs.map((st) => (
+                  <option key={st.id} value={st.id}>
+                    {st.nama} ({st.jabatan})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          {accForm.role !== 'ADMIN' && (
+            <div className="rounded-xl border border-teal-200 dark:border-teal-800/70 bg-teal-50/60 dark:bg-teal-950/30 p-3 space-y-2.5">
+              <label className="flex items-start gap-2.5 text-xs font-semibold text-teal-900 dark:text-teal-200 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={Boolean(accForm.aksesSarpras)}
+                  onChange={(e) =>
+                    setAccForm({
+                      ...accForm,
+                      aksesSarpras: e.target.checked,
+                      tugasTambahan:
+                        e.target.checked && !accForm.tugasTambahan
+                          ? 'Input Data Sarana & Prasarana Sekolah'
+                          : accForm.tugasTambahan,
+                    })
+                  }
+                  className="mt-0.5 rounded border-slate-300 text-teal-700"
+                />
+                <span>
+                  Tugas Tambahan: Input Data Sarana &amp; Prasarana Sekolah
+                  <span className="block font-normal text-[11px] text-slate-600 dark:text-slate-400 mt-0.5">
+                    Saat login, pengguna dapat langsung masuk ke menu Sarana &amp; Prasarana untuk menginput dan memperbarui gedung &amp; aset sekolah.
+                  </span>
+                </span>
+              </label>
+              {accForm.aksesSarpras && (
+                <div>
+                  <label className="block text-[11px] font-semibold mb-1 text-slate-700 dark:text-slate-300">
+                    Keterangan Tugas Tambahan
+                  </label>
+                  <input
+                    type="text"
+                    value={accForm.tugasTambahan || ''}
+                    onChange={(e) => setAccForm({...accForm, tugasTambahan: e.target.value})}
+                    placeholder="Contoh: Input Data Sarana & Prasarana Sekolah"
+                    className="w-full px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                  />
+                </div>
+              )}
+            </div>
+          )}
           <div className="flex justify-end gap-2 pt-2">
             <button
               type="button"
@@ -1612,6 +2078,218 @@ export const PanelAdminPage: React.FC = () => {
             </button>
           </div>
         </form>
+      </Modal>
+
+      {/* Modal Tambah Mata Pelajaran */}
+      <Modal
+        open={addMapelOpen}
+        onClose={() => setAddMapelOpen(false)}
+        title="Tambah Mata Pelajaran Baru"
+        subtitle={`Tambahkan mata pelajaran dan pilih guru pengampu untuk periode ${selectedPeriod.label}.`}
+        maxWidthClass="max-w-lg"
+      >
+        <form onSubmit={handleCreateMapel} className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+            <div className="sm:col-span-3">
+              <label className="block text-xs font-semibold mb-1">Nama Mata Pelajaran *</label>
+              <input
+                type="text"
+                required
+                value={newMapelName}
+                onChange={(e) => setNewMapelName(e.target.value)}
+                placeholder="Contoh: Koding & Kecerdasan Artifisial"
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-sm"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold mb-1">KKM</label>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                value={newMapelKkm}
+                onChange={(e) => setNewMapelKkm(Number(e.target.value))}
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-sm font-mono-num"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold mb-1.5">
+              Pilih Guru Pengampu ({selectedPeriod.label})
+            </label>
+            <div className="max-h-56 overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-800 divide-y divide-slate-100 dark:divide-slate-800">
+              {periodGurus.map((g) => {
+                const checked = newMapelGuruIds.includes(g.id);
+                return (
+                  <label
+                    key={g.id}
+                    className="flex items-center justify-between gap-3 px-3 py-2 text-xs cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/50"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() =>
+                          setNewMapelGuruIds((prev) =>
+                            checked ? prev.filter((id) => id !== g.id) : [...prev, g.id]
+                          )
+                        }
+                        className="rounded border-slate-300 text-teal-700"
+                      />
+                      <span className="font-semibold text-slate-800 dark:text-slate-100 truncate">
+                        {g.nama}
+                      </span>
+                    </div>
+                    <span className="text-[11px] text-slate-500 shrink-0">
+                      Kls {g.kelasDiampu.join(', ') || '-'}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <button
+              type="button"
+              onClick={() => setAddMapelOpen(false)}
+              className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-sm font-medium"
+            >
+              Batal
+            </button>
+            <button
+              type="submit"
+              className="px-4 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-sm font-semibold cursor-pointer"
+            >
+              Tambah Mata Pelajaran
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Modal Edit Nama & KKM Mata Pelajaran */}
+      <Modal
+        open={Boolean(editMapelTarget)}
+        onClose={() => setEditMapelTarget(null)}
+        title="Ubah Mata Pelajaran"
+        maxWidthClass="max-w-md"
+      >
+        {editMapelTarget && (
+          <form onSubmit={handleUpdateMapel} className="space-y-4">
+            <div>
+              <label className="block text-xs font-semibold mb-1">Nama Mata Pelajaran *</label>
+              <input
+                type="text"
+                required
+                value={editMapelTarget.name}
+                onChange={(e) =>
+                  setEditMapelTarget({...editMapelTarget, name: e.target.value})
+                }
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-sm"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold mb-1">Nilai KKM</label>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                value={editMapelTarget.kkm}
+                onChange={(e) =>
+                  setEditMapelTarget({...editMapelTarget, kkm: Number(e.target.value)})
+                }
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-sm font-mono-num"
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setEditMapelTarget(null)}
+                className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-sm font-medium"
+              >
+                Batal
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-sm font-semibold cursor-pointer"
+              >
+                Simpan Perubahan
+              </button>
+            </div>
+          </form>
+        )}
+      </Modal>
+
+      {/* Modal Atur Guru Pengampu Mata Pelajaran */}
+      <Modal
+        open={Boolean(assignGuruTarget)}
+        onClose={() => setAssignGuruTarget(null)}
+        title={assignGuruTarget ? `Atur Guru Pengampu — ${assignGuruTarget.mapel}` : ''}
+        subtitle={`Periode ${selectedPeriod.label}`}
+        maxWidthClass="max-w-lg"
+      >
+        {assignGuruTarget && (
+          <form onSubmit={handleSaveAssignGuru} className="space-y-4">
+            <div className="max-h-72 overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-800 divide-y divide-slate-100 dark:divide-slate-800">
+              {periodGurus.map((g) => {
+                const checked = assignGuruTarget.guruIds.includes(g.id);
+                return (
+                  <label
+                    key={g.id}
+                    className="flex items-center justify-between gap-3 px-3.5 py-2.5 text-xs cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/50"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() =>
+                          setAssignGuruTarget((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  guruIds: checked
+                                    ? prev.guruIds.filter((id) => id !== g.id)
+                                    : [...prev.guruIds, g.id],
+                                }
+                              : null
+                          )
+                        }
+                        className="rounded border-slate-300 text-teal-700"
+                      />
+                      <div className="min-w-0">
+                        <p className="font-semibold text-slate-800 dark:text-slate-100 truncate">
+                          {g.nama}
+                        </p>
+                        <p className="text-[11px] text-slate-500 truncate">
+                          Saat ini mengampu: {g.mapelDiampu.join(', ') || 'Belum ada'}
+                        </p>
+                      </div>
+                    </div>
+                    <span className="text-[11px] font-mono-num text-slate-500 shrink-0">
+                      Kls {g.kelasDiampu.join(', ') || '-'}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setAssignGuruTarget(null)}
+                className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-sm font-medium"
+              >
+                Batal
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-sm font-semibold cursor-pointer"
+              >
+                Simpan Guru Pengampu
+              </button>
+            </div>
+          </form>
+        )}
       </Modal>
     </div>
   );

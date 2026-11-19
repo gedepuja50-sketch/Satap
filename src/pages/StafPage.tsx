@@ -1,7 +1,18 @@
 // Halaman 4: Daftar Staf / Tenaga Kependidikan
 
 import React, {useState} from 'react';
-import {Edit3, Mail, MapPin, Phone, Plus, Trash2, Upload, UserCog} from 'lucide-react';
+import {
+  Building2,
+  Edit3,
+  KeyRound,
+  Mail,
+  MapPin,
+  Phone,
+  Plus,
+  Trash2,
+  Upload,
+  UserCog,
+} from 'lucide-react';
 import {useSchool} from '../context/SchoolContext';
 import {compressImageToDataUrl} from '../services/mediaDb';
 import {Staf} from '../types/school';
@@ -20,7 +31,16 @@ const emptyStaf = (): Staf => ({
 });
 
 export const StafPage: React.FC = () => {
-  const {state, currentUser, saveStaf, deleteStaf, confirmDelete, showToast} = useSchool();
+  const {
+    state,
+    currentUser,
+    saveStaf,
+    deleteStaf,
+    saveAccount,
+    toggleSarprasAccess,
+    confirmDelete,
+    showToast,
+  } = useSchool();
   const isAdmin = currentUser?.role === 'ADMIN';
 
   const [modalOpen, setModalOpen] = useState(false);
@@ -93,67 +113,148 @@ export const StafPage: React.FC = () => {
         />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {state.stafs.map((s) => (
-            <div
-              key={s.id}
-              className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 flex items-start justify-between gap-4"
-            >
-              <div className="flex items-start gap-4 min-w-0">
-                <Avatar src={s.foto} name={s.nama} size="lg" />
-                <div className="min-w-0">
-                  <p className="text-xs font-semibold text-teal-700 dark:text-teal-400">
-                    {s.status} · <span className="font-mono-num text-slate-500 dark:text-slate-400">{s.nipAtauId}</span>
-                  </p>
-                  <h2 className="mt-0.5 text-base font-display font-semibold text-slate-900 dark:text-slate-100 truncate">
-                    {s.nama}
-                  </h2>
-                  <p className="text-sm font-medium text-slate-700 dark:text-slate-300">{s.jabatan}</p>
+          {state.stafs.map((s) => {
+            const linkedAccount = state.accounts.find(
+              (a) =>
+                a.role === 'STAF' &&
+                (a.stafId === s.id || a.namaLengkap.toLowerCase() === s.nama.toLowerCase())
+            );
+            const handleCreateStafLogin = () => {
+              const baseSlug =
+                s.nama
+                  .toLowerCase()
+                  .replace(/[^a-z0-9]/g, '')
+                  .slice(0, 8) || 'staf';
+              let candidate = `staf_${baseSlug}`;
+              let idx = 1;
+              while (state.accounts.some((a) => a.username.toLowerCase() === candidate.toLowerCase())) {
+                candidate = `staf_${baseSlug}${idx++}`;
+              }
+              saveAccount(
+                {
+                  id: `usr-staf-${Date.now()}`,
+                  username: candidate,
+                  password: 'staf123',
+                  role: 'STAF',
+                  namaLengkap: s.nama,
+                  active: true,
+                  stafId: s.id,
+                  aksesSarpras: true,
+                  tugasTambahan: 'Input Data Sarana & Prasarana Sekolah',
+                },
+                true
+              );
+            };
 
-                  <div className="mt-3 space-y-1 text-xs text-slate-500 dark:text-slate-400">
-                    <p className="flex items-center gap-1.5 font-mono-num">
-                      <Phone className="w-3.5 h-3.5 text-teal-600 shrink-0" />
-                      {s.noHp || '-'}
+            return (
+              <div
+                key={s.id}
+                className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 flex items-start justify-between gap-4"
+              >
+                <div className="flex items-start gap-4 min-w-0 flex-1">
+                  <Avatar src={s.foto} name={s.nama} size="lg" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-semibold text-teal-700 dark:text-teal-400">
+                      {s.status} · <span className="font-mono-num text-slate-500 dark:text-slate-400">{s.nipAtauId}</span>
                     </p>
-                    <p className="flex items-center gap-1.5 truncate">
-                      <Mail className="w-3.5 h-3.5 text-teal-600 shrink-0" />
-                      <span className="truncate">{s.email || '-'}</span>
-                    </p>
-                    <p className="flex items-center gap-1.5">
-                      <MapPin className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                      <span className="truncate">{s.alamat || '-'}</span>
-                    </p>
+                    <h2 className="mt-0.5 text-base font-display font-semibold text-slate-900 dark:text-slate-100 truncate">
+                      {s.nama}
+                    </h2>
+                    <p className="text-sm font-medium text-slate-700 dark:text-slate-300">{s.jabatan}</p>
+
+                    <div className="mt-3 space-y-1 text-xs text-slate-500 dark:text-slate-400">
+                      <p className="flex items-center gap-1.5 font-mono-num">
+                        <Phone className="w-3.5 h-3.5 text-teal-600 shrink-0" />
+                        {s.noHp || '-'}
+                      </p>
+                      <p className="flex items-center gap-1.5 truncate">
+                        <Mail className="w-3.5 h-3.5 text-teal-600 shrink-0" />
+                        <span className="truncate">{s.email || '-'}</span>
+                      </p>
+                      <p className="flex items-center gap-1.5">
+                        <MapPin className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                        <span className="truncate">{s.alamat || '-'}</span>
+                      </p>
+                    </div>
+
+                    {/* Status Akun Login & Penugasan Sarpras */}
+                    <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center gap-2 text-[11px]">
+                      {linkedAccount ? (
+                        <>
+                          <span className="inline-flex items-center gap-1 font-mono-num font-semibold text-slate-700 dark:text-slate-300">
+                            <KeyRound className="w-3 h-3 text-amber-500" />
+                            @{linkedAccount.username}
+                          </span>
+                          <span className="text-slate-300 dark:text-slate-700">·</span>
+                          <span
+                            className={`inline-flex items-center gap-1 font-semibold ${
+                              linkedAccount.aksesSarpras
+                                ? 'text-teal-700 dark:text-teal-400'
+                                : 'text-slate-400'
+                            }`}
+                          >
+                            <Building2 className="w-3 h-3" />
+                            {linkedAccount.aksesSarpras
+                              ? 'Tugas: Input Sarpras'
+                              : 'Tanpa Tugas Sarpras'}
+                          </span>
+                          {isAdmin && (
+                            <button
+                              type="button"
+                              onClick={() => toggleSarprasAccess(linkedAccount.id)}
+                              className="ml-auto px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 hover:border-teal-600 text-[11px] font-semibold text-teal-700 dark:text-teal-400 cursor-pointer"
+                            >
+                              {linkedAccount.aksesSarpras ? 'Cabut Tugas Sarpras' : 'Tugaskan Input Sarpras'}
+                            </button>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <span className="text-slate-400">Belum punya akun login staf</span>
+                          {isAdmin && (
+                            <button
+                              type="button"
+                              onClick={handleCreateStafLogin}
+                              className="ml-auto px-2.5 py-1 rounded-lg bg-teal-700 hover:bg-teal-800 text-white text-[11px] font-semibold cursor-pointer"
+                            >
+                              + Buat Akun Login &amp; Tugas Sarpras
+                            </button>
+                          )}
+                        </>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              {isAdmin && (
-                <div className="flex flex-col gap-1.5 shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => openEdit(s)}
-                    className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:text-teal-700 hover:bg-slate-100 dark:hover:bg-slate-800"
-                    aria-label="Edit staf"
-                  >
-                    <Edit3 className="w-4 h-4" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      confirmDelete(
-                        'Hapus Data Staf?',
-                        `Data tenaga kependidikan "${s.nama}" akan dihapus.`,
-                        () => deleteStaf(s.id)
-                      )
-                    }
-                    className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30"
-                    aria-label="Hapus staf"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              )}
-            </div>
-          ))}
+                {isAdmin && (
+                  <div className="flex flex-col gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => openEdit(s)}
+                      className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:text-teal-700 hover:bg-slate-100 dark:hover:bg-slate-800"
+                      aria-label="Edit staf"
+                    >
+                      <Edit3 className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        confirmDelete(
+                          'Hapus Data Staf?',
+                          `Data tenaga kependidikan "${s.nama}" akan dihapus.`,
+                          () => deleteStaf(s.id)
+                        )
+                      }
+                      className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30"
+                      aria-label="Hapus staf"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 

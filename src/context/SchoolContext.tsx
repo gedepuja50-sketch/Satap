@@ -21,6 +21,7 @@ import {
   GuruCertificate,
   KepalaSekolah,
   KelasLevel,
+  LoginConfig,
   NilaiRecord,
   Prestasi,
   SaranaAsset,
@@ -32,6 +33,7 @@ import {
   StudentRaporExtras,
   UserAccount,
 } from '../types/school';
+import {evaluateStudentPromotionStatus} from '../utils/gradeUtils';
 import {ConfirmDialogModal, ConfirmDialogState, ToastContainer, ToastItem} from '../components/ui/ToastAndConfirm';
 
 export interface CreatePeriodOptions {
@@ -46,6 +48,7 @@ interface SchoolContextValue {
   state: SchoolDatabaseState;
   currentUser: UserAccount | null;
   currentGuru: Guru | null;
+  currentStaf: Staf | null;
   selectedPeriodId: string;
   setSelectedPeriodId: (periodId: string) => void;
   selectedPeriod: EducationPeriod;
@@ -106,9 +109,19 @@ interface SchoolContextValue {
   savePrestasi: (prestasi: Prestasi, isNew?: boolean) => void;
   deletePrestasi: (id: string) => void;
 
+  // Mata Pelajaran & Guru Pengampu
+  addSubject: (nama: string, kkm?: number, guruIds?: string[]) => {ok: boolean; message?: string};
+  renameSubject: (oldName: string, newName: string, kkm?: number) => {ok: boolean; message?: string};
+  deleteSubject: (nama: string) => void;
+  updateSubjectTeachers: (nama: string, guruIds: string[]) => void;
+
+  // Tampilan & Catatan Halaman Login
+  updateLoginConfig: (config: LoginConfig, adminActor?: UserAccount) => void;
+
   // Manajemen Akun & Backup/Restore
   saveAccount: (account: UserAccount, isNew?: boolean) => void;
   deleteAccount: (userId: string) => void;
+  toggleSarprasAccess: (userId: string) => void;
   restoreFromBackup: (newState: SchoolDatabaseState) => void;
   resetAllToSeed: () => Promise<void>;
 }
@@ -190,6 +203,16 @@ export const SchoolProvider: React.FC<{children: React.ReactNode}> = ({children}
       state.gurus.find((g) => g.userId === currentUser.id || g.id === currentUser.guruId) || null
     );
   }, [currentUser, state.gurus, selectedPeriod.id]);
+
+  // Resolusi Staf untuk akun STAF yang sedang login
+  const currentStaf = useMemo(() => {
+    if (!currentUser || currentUser.role !== 'STAF') return null;
+    return (
+      state.stafs.find(
+        (s) => s.id === currentUser.stafId || s.nama.toLowerCase() === currentUser.namaLengkap.toLowerCase()
+      ) || null
+    );
+  }, [currentUser, state.stafs]);
 
   const showToast = useCallback((message: string, type: ToastItem['type'] = 'success') => {
     const id = `toast_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
@@ -328,14 +351,33 @@ export const SchoolProvider: React.FC<{children: React.ReactNode}> = ({children}
               customFields: g.customFields.map((cf) => ({...cf})),
             }));
 
+          const sourcePeriod = prev.periods.find((p) => p.id === opts.copyFromPeriodId);
           const sourceSiswas = prev.siswas.filter((s) => s.periodId === opts.copyFromPeriodId);
           copiedSiswas = sourceSiswas
             .map((s, idx) => {
               let nextKelas: KelasLevel | null = s.kelas;
               if (opts.promoteClasses) {
-                if (s.kelas === '7') nextKelas = '8';
-                else if (s.kelas === '8') nextKelas = '9';
-                else nextKelas = null; // Kelas 9 lulus
+                if (sourcePeriod?.semester === 'Genap') {
+                  const promo = evaluateStudentPromotionStatus(
+                    s,
+                    sourcePeriod,
+                    prev.subjects,
+                    prev.nilaiRecords,
+                    prev.gradeSettings
+                  );
+                  if (promo.code === 'LULUS') {
+                    nextKelas = null; // Kelas 9 Lulus
+                  } else if (promo.code === 'NAIK_KELAS') {
+                    nextKelas = promo.nextKelas;
+                  } else {
+                    // Belum memenuhi KKM atau nilai belum lengkap: tetap di kelas semula
+                    nextKelas = s.kelas;
+                  }
+                } else {
+                  if (s.kelas === '7') nextKelas = '8';
+                  else if (s.kelas === '8') nextKelas = '9';
+                  else nextKelas = null;
+                }
               }
               if (!nextKelas) return null;
               return {
@@ -900,6 +942,170 @@ export const SchoolProvider: React.FC<{children: React.ReactNode}> = ({children}
     [appendLog, showToast]
   );
 
+  // === MATA PELAJARAN & GURU PENGAMPU ===
+  const addSubject = useCallback(
+    (nama: string, kkm = 75, guruIds: string[] = []) => {
+      const clean = nama.trim();
+      if (!clean) {
+        return {ok: false, message: 'Nama mata pelajaran wajib diisi.'};
+      }
+      const duplicate = state.subjects.some(
+        (s) => s.toLowerCase() === clean.toLowerCase()
+      );
+      if (duplicate) {
+        return {ok: false, message: `Mata pelajaran "${clean}" sudah terdaftar.`};
+      }
+      const clampedKkm = Math.max(0, Math.min(100, Number(kkm) || 75));
+      setState((prev) => {
+        const updatedGurus =
+          guruIds.length > 0
+            ? prev.gurus.map((g) =>
+                guruIds.includes(g.id) && !g.mapelDiampu.includes(clean)
+                  ? {...g, mapelDiampu: [...g.mapelDiampu, clean]}
+                  : g
+              )
+            : prev.gurus;
+        return {
+          ...prev,
+          subjects: [...prev.subjects, clean],
+          gradeSettings: {
+            ...prev.gradeSettings,
+            kkmPerMapel: {
+              ...prev.gradeSettings.kkmPerMapel,
+              [clean]: clampedKkm,
+            },
+          },
+          gurus: updatedGurus,
+          activityLogs: appendLog(
+            prev,
+            'TAMBAH',
+            'Mata Pelajaran',
+            `Menambah mata pelajaran "${clean}" (KKM ${clampedKkm}) dengan ${guruIds.length} guru pengampu.`
+          ),
+        };
+      });
+      showToast(`Mata pelajaran "${clean}" berhasil ditambahkan.`, 'success');
+      return {ok: true};
+    },
+    [state.subjects, appendLog, showToast]
+  );
+
+  const renameSubject = useCallback(
+    (oldName: string, newName: string, kkm?: number) => {
+      const clean = newName.trim();
+      if (!clean) return {ok: false, message: 'Nama mata pelajaran tidak boleh kosong.'};
+      const conflict = state.subjects.some(
+        (s) => s.toLowerCase() === clean.toLowerCase() && s !== oldName
+      );
+      if (conflict) {
+        return {ok: false, message: `Mata pelajaran "${clean}" sudah ada.`};
+      }
+      setState((prev) => {
+        const nextKkmMap = {...prev.gradeSettings.kkmPerMapel};
+        const prevKkm = nextKkmMap[oldName] ?? 75;
+        if (oldName !== clean) delete nextKkmMap[oldName];
+        nextKkmMap[clean] = kkm !== undefined ? Math.max(0, Math.min(100, Number(kkm) || 75)) : prevKkm;
+
+        return {
+          ...prev,
+          subjects: prev.subjects.map((s) => (s === oldName ? clean : s)),
+          gradeSettings: {...prev.gradeSettings, kkmPerMapel: nextKkmMap},
+          gurus: prev.gurus.map((g) => ({
+            ...g,
+            mapelDiampu: g.mapelDiampu.map((m) => (m === oldName ? clean : m)),
+          })),
+          nilaiRecords: prev.nilaiRecords.map((n) =>
+            n.mapel === oldName ? {...n, mapel: clean} : n
+          ),
+          activityLogs: appendLog(
+            prev,
+            'UBAH',
+            'Mata Pelajaran',
+            `Memperbarui mata pelajaran "${oldName}" menjadi "${clean}".`
+          ),
+        };
+      });
+      showToast(`Mata pelajaran "${clean}" berhasil diperbarui.`, 'success');
+      return {ok: true};
+    },
+    [state.subjects, appendLog, showToast]
+  );
+
+  const deleteSubject = useCallback(
+    (nama: string) => {
+      if (state.subjects.length <= 1) {
+        showToast('Minimal harus ada 1 mata pelajaran aktif.', 'warning');
+        return;
+      }
+      setState((prev) => {
+        const nextKkm = {...prev.gradeSettings.kkmPerMapel};
+        delete nextKkm[nama];
+        return {
+          ...prev,
+          subjects: prev.subjects.filter((s) => s !== nama),
+          gradeSettings: {...prev.gradeSettings, kkmPerMapel: nextKkm},
+          gurus: prev.gurus.map((g) => ({
+            ...g,
+            mapelDiampu: g.mapelDiampu.filter((m) => m !== nama),
+          })),
+          activityLogs: appendLog(prev, 'HAPUS', 'Mata Pelajaran', `Menghapus mata pelajaran "${nama}".`),
+        };
+      });
+      showToast(`Mata pelajaran "${nama}" berhasil dihapus.`, 'info');
+    },
+    [state.subjects.length, appendLog, showToast]
+  );
+
+  const updateSubjectTeachers = useCallback(
+    (nama: string, guruIds: string[]) => {
+      setState((prev) => {
+        const updatedGurus = prev.gurus.map((g) => {
+          if (g.periodId !== selectedPeriod.id) return g;
+          const shouldTeach = guruIds.includes(g.id);
+          const currentlyTeaches = g.mapelDiampu.includes(nama);
+          if (shouldTeach && !currentlyTeaches) {
+            return {...g, mapelDiampu: [...g.mapelDiampu, nama]};
+          }
+          if (!shouldTeach && currentlyTeaches) {
+            return {...g, mapelDiampu: g.mapelDiampu.filter((m) => m !== nama)};
+          }
+          return g;
+        });
+        return {
+          ...prev,
+          gurus: updatedGurus,
+          activityLogs: appendLog(
+            prev,
+            'UBAH',
+            'Guru Pengampu Mapel',
+            `Menetapkan ${guruIds.length} guru pengampu untuk mata pelajaran "${nama}" (${selectedPeriod.label}).`
+          ),
+        };
+      });
+      showToast(`Guru pengampu mata pelajaran "${nama}" berhasil disimpan.`, 'success');
+    },
+    [selectedPeriod.id, selectedPeriod.label, appendLog, showToast]
+  );
+
+  // === PENGATURAN TAMPILAN & CATATAN LOGIN ===
+  const updateLoginConfig = useCallback(
+    (config: LoginConfig, adminActor?: UserAccount) => {
+      setState((prev) => ({
+        ...prev,
+        loginConfig: config,
+        activityLogs: appendLog(
+          prev,
+          'UBAH',
+          'Tampilan Menu Login',
+          'Memperbarui teks tampilan interface login dan catatan halaman login.',
+          adminActor
+        ),
+      }));
+      showToast('Pengaturan tampilan & catatan halaman login berhasil disimpan.', 'success');
+    },
+    [appendLog, showToast]
+  );
+
   const saveAccount = useCallback(
     (account: UserAccount, isNew?: boolean) => {
       setState((prev) => ({
@@ -930,6 +1136,42 @@ export const SchoolProvider: React.FC<{children: React.ReactNode}> = ({children}
         };
       });
       showToast('Akun pengguna berhasil dihapus.', 'info');
+    },
+    [appendLog, showToast]
+  );
+
+  const toggleSarprasAccess = useCallback(
+    (userId: string) => {
+      let resultMsg = '';
+      setState((prev) => {
+        const target = prev.accounts.find((a) => a.id === userId);
+        if (!target) return prev;
+        const nextEnabled = !target.aksesSarpras;
+        resultMsg = nextEnabled
+          ? `Tugas input Sarana & Prasarana diaktifkan untuk ${target.namaLengkap}.`
+          : `Tugas input Sarana & Prasarana dinonaktifkan untuk ${target.namaLengkap}.`;
+        return {
+          ...prev,
+          accounts: prev.accounts.map((a) =>
+            a.id === userId
+              ? {
+                  ...a,
+                  aksesSarpras: nextEnabled,
+                  tugasTambahan: nextEnabled
+                    ? a.tugasTambahan || 'Input Data Sarana & Prasarana Sekolah'
+                    : a.tugasTambahan,
+                }
+              : a
+          ),
+          activityLogs: appendLog(
+            prev,
+            'UBAH',
+            'Penugasan Sarpras',
+            `${nextEnabled ? 'Memberikan' : 'Mencabut'} akses input Sarana & Prasarana untuk ${target.namaLengkap} (${target.username}).`
+          ),
+        };
+      });
+      if (resultMsg) showToast(resultMsg, 'success');
     },
     [appendLog, showToast]
   );
@@ -968,6 +1210,7 @@ export const SchoolProvider: React.FC<{children: React.ReactNode}> = ({children}
     state,
     currentUser,
     currentGuru,
+    currentStaf,
     selectedPeriodId,
     setSelectedPeriodId,
     selectedPeriod,
@@ -1011,8 +1254,14 @@ export const SchoolProvider: React.FC<{children: React.ReactNode}> = ({children}
     deleteAsset,
     savePrestasi,
     deletePrestasi,
+    addSubject,
+    renameSubject,
+    deleteSubject,
+    updateSubjectTeachers,
+    updateLoginConfig,
     saveAccount,
     deleteAccount,
+    toggleSarprasAccess,
     restoreFromBackup,
     resetAllToSeed,
   };

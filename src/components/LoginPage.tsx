@@ -5,6 +5,7 @@ import React, {useMemo, useState} from 'react';
 import {
   Award,
   CheckCircle2,
+  Edit3,
   Eye,
   EyeOff,
   FileText,
@@ -15,19 +16,22 @@ import {
   Moon,
   Phone,
   ShieldCheck,
+  StickyNote,
   Sun,
   UserCheck,
+  UserCog,
 } from 'lucide-react';
 import {useSchool} from '../context/SchoolContext';
 import {SCHOOL_BANNER_IMAGE} from '../data/seedData';
 import {Guru, KATEGORI_ADMIN_GURU_DEFAULT, UserAccount} from '../types/school';
 import {formatTanggalId} from '../utils/gradeUtils';
+import {LoginConfigEditor} from './LoginConfigEditor';
 import {Avatar, Modal} from './ui/AvatarAndModal';
 import {FilePreviewModal, PreviewableFileItem} from './ui/FilePreviewModal';
 
 export const LoginPage: React.FC = () => {
   const {state, activePeriod, login, theme, toggleTheme} = useSchool();
-  const {schoolProfile, accounts, gurus, adminGuruEntries, guruCertificates} = state;
+  const {schoolProfile, accounts, gurus, stafs, adminGuruEntries, guruCertificates, loginConfig} = state;
 
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('admin123');
@@ -39,6 +43,38 @@ export const LoginPage: React.FC = () => {
   const [inspectTab, setInspectTab] = useState<'profil' | 'administrasi'>('profil');
   const [photoEnlarge, setPhotoEnlarge] = useState<Guru | null>(null);
   const [previewFile, setPreviewFile] = useState<PreviewableFileItem | null>(null);
+
+  // Modal Akses Admin untuk Edit Menu & Catatan Interface Login langsung dari halaman Login
+  const [adminEditOpen, setAdminEditOpen] = useState(false);
+  const [adminUserInput, setAdminUserInput] = useState('admin');
+  const [adminPassInput, setAdminPassInput] = useState('');
+  const [adminVerifyError, setAdminVerifyError] = useState('');
+  const [verifiedAdmin, setVerifiedAdmin] = useState<UserAccount | null>(null);
+
+  const handleOpenAdminEditor = () => {
+    setAdminUserInput('admin');
+    setAdminPassInput('');
+    setAdminVerifyError('');
+    setVerifiedAdmin(null);
+    setAdminEditOpen(true);
+  };
+
+  const handleVerifyAdmin = (e: React.FormEvent) => {
+    e.preventDefault();
+    setAdminVerifyError('');
+    const matched = accounts.find(
+      (a) =>
+        a.role === 'ADMIN' &&
+        a.active &&
+        a.username.toLowerCase() === adminUserInput.trim().toLowerCase() &&
+        a.password === adminPassInput
+    );
+    if (!matched) {
+      setAdminVerifyError('Username atau kata sandi Admin tidak valid.');
+      return;
+    }
+    setVerifiedAdmin(matched);
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -115,22 +151,34 @@ export const LoginPage: React.FC = () => {
             </p>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={toggleTheme}
-          className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors shrink-0 cursor-pointer"
-          aria-label="Ubah mode tampilan"
-        >
-          {theme === 'light' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4 text-amber-400" />}
-          <span className="hidden sm:inline">{theme === 'light' ? 'Mode Gelap' : 'Mode Terang'}</span>
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={handleOpenAdminEditor}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-teal-600/40 bg-teal-50/80 dark:bg-teal-950/40 text-xs font-semibold text-teal-800 dark:text-teal-300 hover:bg-teal-100 dark:hover:bg-teal-900/50 transition-colors cursor-pointer"
+            title="Akses Admin: Edit menu & tambahkan catatan pada tampilan login"
+          >
+            <Edit3 className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Edit Menu &amp; Catatan Login (Admin)</span>
+            <span className="sm:hidden">Edit Login</span>
+          </button>
+          <button
+            type="button"
+            onClick={toggleTheme}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors cursor-pointer"
+            aria-label="Ubah mode tampilan"
+          >
+            {theme === 'light' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4 text-amber-400" />}
+            <span className="hidden sm:inline">{theme === 'light' ? 'Mode Gelap' : 'Mode Terang'}</span>
+          </button>
+        </div>
       </header>
 
       {/* Konten Utama Login 2 Kolom */}
-      <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-8 lg:py-12 grid grid-cols-1 lg:grid-cols-12 gap-8 items-stretch">
-        {/* Kolom Kiri: Visual Sekolah & Daftar Bar Guru + Akun Demo */}
+      <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-8 lg:py-12 grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+        {/* Kolom Kiri: Visual Sekolah, Daftar Bar Guru & Catatan Login */}
         <section className="lg:col-span-7 flex flex-col gap-6">
-          <div className="relative rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 bg-slate-900 min-h-[220px] sm:min-h-[260px] flex items-end">
+          <div className="relative rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 bg-slate-900 min-h-[220px] sm:min-h-[250px] flex items-end">
             <img
               src={SCHOOL_BANNER_IMAGE}
               alt="Lingkungan SMPN Satu Atap Besakih"
@@ -140,13 +188,13 @@ export const LoginPage: React.FC = () => {
             <div className="absolute inset-0 bg-gradient-to-t from-slate-950/90 via-slate-950/45 to-transparent" />
             <div className="relative p-6 sm:p-8 text-white max-w-2xl">
               <p className="text-xs font-medium text-amber-300 tracking-wide">
-                Sistem Informasi & Manajemen Sekolah Terpadu · {activePeriod.label}
+                {loginConfig.bannerTagline} · {activePeriod.label}
               </p>
               <h2 className="mt-1.5 text-2xl sm:text-3xl font-display font-bold leading-tight text-balance">
-                {schoolProfile.nama}
+                {loginConfig.bannerHeadline || schoolProfile.nama}
               </h2>
               <p className="mt-2 text-sm text-slate-200 leading-relaxed">
-                {schoolProfile.alamat} · NPSN <span className="font-mono-num">{schoolProfile.npsn}</span>
+                {loginConfig.bannerSubtext}
               </p>
             </div>
           </div>
@@ -156,10 +204,10 @@ export const LoginPage: React.FC = () => {
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
               <div>
                 <h3 className="text-base font-display font-semibold text-slate-900 dark:text-slate-100">
-                  Profil Pendidik (Guru) & Akun Demo Uji Coba
+                  {loginConfig.guruSectionTitle}
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  Klik bar guru untuk melihat Profil & Administrasi Guru (hanya tampil), atau tekan &ldquo;Isi Login&rdquo; untuk masuk.
+                  {loginConfig.guruSectionSubtitle}
                 </p>
               </div>
               <span className="text-xs font-medium text-teal-700 dark:text-teal-400 shrink-0">
@@ -170,15 +218,27 @@ export const LoginPage: React.FC = () => {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-[340px] overflow-y-auto pr-1">
               {accounts.map((acc) => {
                 const guruData = acc.role === 'GURU' ? resolveGuruForAccount(acc) : undefined;
+                const stafData =
+                  acc.role === 'STAF'
+                    ? stafs.find(
+                        (s) =>
+                          s.id === acc.stafId ||
+                          s.nama.toLowerCase() === acc.namaLengkap.toLowerCase()
+                      )
+                    : undefined;
                 const subtitle =
                   acc.role === 'ADMIN'
                     ? 'Akses Penuh · Panel Admin & Pusat Arsip'
-                    : guruData
-                      ? `Mapel: ${guruData.mapelDiampu.join(', ')}`
-                      : 'Akun Guru';
+                    : acc.role === 'STAF'
+                      ? `${stafData?.jabatan || 'Tenaga Kependidikan'}${
+                          acc.aksesSarpras ? ' · Input Sarpras' : ''
+                        }`
+                      : guruData
+                        ? `Mapel: ${guruData.mapelDiampu.join(', ')}`
+                        : 'Akun Guru';
                 const isSelected = username.toLowerCase() === acc.username.toLowerCase();
 
-                if (acc.role === 'ADMIN' || !guruData) {
+                if (acc.role === 'ADMIN' || acc.role === 'STAF' || !guruData) {
                   return (
                     <button
                       key={acc.id}
@@ -192,7 +252,13 @@ export const LoginPage: React.FC = () => {
                     >
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-xs font-semibold text-teal-700 dark:text-teal-400 flex items-center gap-1.5">
-                          <ShieldCheck className="w-3.5 h-3.5 text-amber-500" />
+                          {acc.role === 'ADMIN' ? (
+                            <ShieldCheck className="w-3.5 h-3.5 text-amber-500" />
+                          ) : acc.role === 'STAF' ? (
+                            <UserCog className="w-3.5 h-3.5 text-amber-500" />
+                          ) : (
+                            <UserCheck className="w-3.5 h-3.5" />
+                          )}
                           {acc.role}
                         </span>
                         <span className="font-mono-num text-[11px] text-slate-500 dark:text-slate-400">
@@ -266,10 +332,67 @@ export const LoginPage: React.FC = () => {
               })}
             </div>
           </div>
+
+          {/* Catatan & Informasi Sekolah pada Halaman Login (Dikelola Admin) */}
+          <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 sm:p-6">
+            <div className="flex items-center justify-between gap-2 mb-3.5">
+              <div className="flex items-center gap-2">
+                <StickyNote className="w-4 h-4 text-amber-500 shrink-0" />
+                <h3 className="text-sm sm:text-base font-display font-semibold text-slate-900 dark:text-slate-100">
+                  Catatan &amp; Informasi Sekolah ({loginConfig.notes.length})
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={handleOpenAdminEditor}
+                className="inline-flex items-center gap-1 text-xs font-semibold text-teal-700 dark:text-teal-400 hover:underline cursor-pointer"
+              >
+                <Edit3 className="w-3.5 h-3.5" />
+                Kelola Catatan (Admin)
+              </button>
+            </div>
+
+            {loginConfig.notes.length === 0 ? (
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Belum ada catatan khusus yang ditambahkan Admin di halaman login.
+              </p>
+            ) : (
+              <div className="space-y-2.5">
+                {loginConfig.notes.map((note) => (
+                  <div
+                    key={note.id}
+                    className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60"
+                  >
+                    <div className="flex items-center gap-2 text-[11px]">
+                      <span
+                        className={`font-semibold ${
+                          note.kategori === 'Penting'
+                            ? 'text-red-600 dark:text-red-400'
+                            : note.kategori === 'Jadwal'
+                              ? 'text-amber-600 dark:text-amber-400'
+                              : 'text-teal-700 dark:text-teal-400'
+                        }`}
+                      >
+                        {note.kategori}
+                      </span>
+                      <span aria-hidden="true">·</span>
+                      <span className="font-mono-num text-slate-500">{formatTanggalId(note.tanggal)}</span>
+                    </div>
+                    <p className="text-sm font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
+                      {note.judul}
+                    </p>
+                    <p className="text-xs text-slate-600 dark:text-slate-300 mt-1 leading-relaxed">
+                      {note.isi}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </section>
 
         {/* Kolom Kanan: Formulir Masuk */}
-        <section className="lg:col-span-5 flex flex-col justify-center">
+        <section className="lg:col-span-5 flex flex-col justify-center lg:sticky lg:top-8">
           <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 sm:p-8 shadow-sm">
             <div className="flex items-center gap-3.5 mb-6">
               <img
@@ -279,10 +402,10 @@ export const LoginPage: React.FC = () => {
               />
               <div>
                 <h2 className="text-xl font-display font-bold text-slate-900 dark:text-slate-100">
-                  Masuk ke Sistem
+                  {loginConfig.formTitle}
                 </h2>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  Gunakan akun Admin atau Guru yang terdaftar
+                  {loginConfig.formSubtitle}
                 </p>
               </div>
             </div>
@@ -353,16 +476,17 @@ export const LoginPage: React.FC = () => {
             </form>
 
             <div className="mt-6 pt-5 border-t border-slate-200 dark:border-slate-800 space-y-2 text-xs text-slate-500 dark:text-slate-400">
-              <div className="flex items-center gap-2">
-                <KeyRound className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                <span>
-                  Admin: <strong className="text-slate-700 dark:text-slate-300">admin / admin123</strong> · Guru:{' '}
-                  <strong className="text-slate-700 dark:text-slate-300">guru1–guru8 / guru123</strong>
-                </span>
-              </div>
-              <p>
-                Seluruh data tersimpan otomatis di browser Anda (localStorage & IndexedDB) agar tetap aman saat halaman dimuat ulang.
-              </p>
+              {loginConfig.showDemoCredentials && (
+                <div className="flex items-center gap-2">
+                  <KeyRound className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                  <span>
+                    Admin: <strong className="text-slate-700 dark:text-slate-300">admin / admin123</strong> · Guru:{' '}
+                    <strong className="text-slate-700 dark:text-slate-300">guru1–guru8 / guru123</strong> · Staf:{' '}
+                    <strong className="text-slate-700 dark:text-slate-300">staf1–staf4 / staf123</strong>
+                  </span>
+                </div>
+              )}
+              {loginConfig.footerNote && <p>{loginConfig.footerNote}</p>}
             </div>
           </div>
         </section>
@@ -652,6 +776,99 @@ export const LoginPage: React.FC = () => {
 
       {/* Modal Pratinjau Berkas Read-Only */}
       <FilePreviewModal item={previewFile} onClose={() => setPreviewFile(null)} />
+
+      {/* Modal Akses Admin: Edit Menu & Catatan Halaman Login */}
+      <Modal
+        open={adminEditOpen}
+        onClose={() => {
+          setAdminEditOpen(false);
+          setVerifiedAdmin(null);
+        }}
+        title={
+          verifiedAdmin
+            ? 'Editor Tampilan & Catatan Interface Login'
+            : 'Verifikasi Akses Administrator'
+        }
+        subtitle={
+          verifiedAdmin
+            ? `Masuk sebagai ${verifiedAdmin.namaLengkap} (${verifiedAdmin.username})`
+            : 'Hanya Administrator yang dapat mengubah teks menu dan catatan pada halaman login.'
+        }
+        maxWidthClass={verifiedAdmin ? 'max-w-3xl' : 'max-w-md'}
+      >
+        {!verifiedAdmin ? (
+          <form onSubmit={handleVerifyAdmin} className="space-y-4">
+            <div>
+              <label className="block text-xs font-semibold mb-1">Username Admin *</label>
+              <input
+                type="text"
+                required
+                value={adminUserInput}
+                onChange={(e) => setAdminUserInput(e.target.value)}
+                placeholder="admin"
+                className="w-full px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-sm"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold mb-1">Kata Sandi Admin *</label>
+              <input
+                type="password"
+                required
+                value={adminPassInput}
+                onChange={(e) => setAdminPassInput(e.target.value)}
+                placeholder="Masukkan kata sandi admin (demo: admin123)"
+                className="w-full px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-sm"
+              />
+            </div>
+            {adminVerifyError && (
+              <div className="rounded-xl border border-red-200 dark:border-red-900/70 bg-red-50 dark:bg-red-950/40 px-3 py-2 text-xs font-medium text-red-700 dark:text-red-300">
+                {adminVerifyError}
+              </div>
+            )}
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              Setelah login sebagai Admin, pengaturan ini juga tersedia kapan saja pada menu{' '}
+              <strong>Panel Admin → Tampilan Login</strong>.
+            </p>
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setAdminEditOpen(false)}
+                className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-sm font-medium"
+              >
+                Batal
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-sm font-semibold cursor-pointer"
+              >
+                Buka Editor Login
+              </button>
+            </div>
+          </form>
+        ) : (
+          <div className="space-y-4">
+            <LoginConfigEditor
+              adminActor={verifiedAdmin}
+              onSaved={() => {
+                setAdminEditOpen(false);
+                setVerifiedAdmin(null);
+              }}
+            />
+            <div className="flex justify-end pt-2 border-t border-slate-200 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => {
+                  setAdminEditOpen(false);
+                  setVerifiedAdmin(null);
+                }}
+                className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold cursor-pointer"
+              >
+                Tutup Editor
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 };

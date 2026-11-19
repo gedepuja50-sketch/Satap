@@ -6,6 +6,7 @@ import {
   Download,
   Edit3,
   Eye,
+  FileDown,
   FileText,
   KeyRound,
   Mail,
@@ -17,7 +18,8 @@ import {
 } from 'lucide-react';
 import {useSchool} from '../context/SchoolContext';
 import {compressImageToDataUrl, getMediaFile} from '../services/mediaDb';
-import {DAFTAR_MAPEL, Guru, GuruCustomField, KelasLevel} from '../types/school';
+import {Guru, GuruCustomField, KelasLevel} from '../types/school';
+import {exportAllGurusPdf, exportSingleGuruPdf} from '../utils/exportUtils';
 import {formatTanggalId} from '../utils/gradeUtils';
 import {Avatar, EmptyState, Modal} from '../components/ui/AvatarAndModal';
 
@@ -63,6 +65,7 @@ export const GuruPage: React.FC = () => {
     saveAccount,
     confirmDelete,
     showToast,
+    addLog,
   } = useSchool();
   const isAdmin = currentUser?.role === 'ADMIN';
 
@@ -71,10 +74,61 @@ export const GuruPage: React.FC = () => {
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [isNewGuru, setIsNewGuru] = useState(false);
   const [form, setForm] = useState<Guru>(emptyGuru(selectedPeriod.id));
+  const [downloadingAll, setDownloadingAll] = useState(false);
+  const [downloadingGuruId, setDownloadingGuruId] = useState<string | null>(null);
 
   // Reset password modal (khusus Admin)
   const [resetTarget, setResetTarget] = useState<Guru | null>(null);
   const [newPassword, setNewPassword] = useState('guru123');
+
+  const handleDownloadSingleGuru = async (g: Guru) => {
+    if (!isAdmin) return;
+    try {
+      setDownloadingGuruId(g.id);
+      await exportSingleGuruPdf(
+        g,
+        state.schoolProfile,
+        selectedPeriod.label,
+        state.guruCertificates,
+        state.kepalaSekolah
+      );
+      addLog(
+        'EXPORT',
+        'Profil Guru PDF',
+        `Mengunduh profil lengkap guru ${g.nama} (${selectedPeriod.label}).`
+      );
+      showToast(`Profil lengkap ${g.nama} berhasil diunduh.`, 'success');
+    } catch {
+      showToast('Gagal membuat file PDF profil guru.', 'error');
+    } finally {
+      setDownloadingGuruId(null);
+    }
+  };
+
+  const handleDownloadAllGurus = async () => {
+    if (!isAdmin || periodGurus.length === 0) return;
+    const targetList = filteredGurus.length > 0 ? filteredGurus : periodGurus;
+    try {
+      setDownloadingAll(true);
+      await exportAllGurusPdf(
+        targetList,
+        state.schoolProfile,
+        selectedPeriod.label,
+        state.guruCertificates,
+        state.kepalaSekolah
+      );
+      addLog(
+        'EXPORT',
+        'Semua Profil Guru PDF',
+        `Mengunduh gabungan ${targetList.length} profil lengkap guru dalam satu berkas PDF (${selectedPeriod.label}).`
+      );
+      showToast(`Gabungan ${targetList.length} profil lengkap guru berhasil diunduh.`, 'success');
+    } catch {
+      showToast('Gagal membuat file PDF gabungan semua guru.', 'error');
+    } finally {
+      setDownloadingAll(false);
+    }
+  };
 
   const filteredGurus = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -233,14 +287,26 @@ export const GuruPage: React.FC = () => {
             </button>
           )}
           {isAdmin && (
-            <button
-              type="button"
-              onClick={openAddGuru}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-sm font-semibold transition-colors whitespace-nowrap cursor-pointer"
-            >
-              <Plus className="w-4 h-4" />
-              Tambah Guru
-            </button>
+            <>
+              <button
+                type="button"
+                disabled={downloadingAll || periodGurus.length === 0}
+                onClick={handleDownloadAllGurus}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-amber-300 dark:border-amber-700/70 bg-amber-50 dark:bg-amber-950/30 hover:bg-amber-100 text-amber-800 dark:text-amber-300 text-xs sm:text-sm font-semibold transition-colors whitespace-nowrap disabled:opacity-50 cursor-pointer"
+                title="Unduh semua profil guru lengkap menjadi satu file PDF"
+              >
+                <FileDown className="w-4 h-4" />
+                {downloadingAll ? 'Menyiapkan PDF...' : 'Download Semua Profil (PDF)'}
+              </button>
+              <button
+                type="button"
+                onClick={openAddGuru}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-sm font-semibold transition-colors whitespace-nowrap cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                Tambah Guru
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -324,6 +390,18 @@ export const GuruPage: React.FC = () => {
                   </button>
 
                   <div className="flex items-center gap-1.5">
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        disabled={downloadingGuruId === g.id}
+                        onClick={() => handleDownloadSingleGuru(g)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl border border-amber-300 dark:border-amber-700/70 bg-amber-50 dark:bg-amber-950/30 hover:bg-amber-100 text-amber-800 dark:text-amber-300 text-xs font-semibold transition-colors disabled:opacity-50 cursor-pointer"
+                        title="Unduh profil lengkap guru ini (PDF)"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        {downloadingGuruId === g.id ? '...' : 'PDF'}
+                      </button>
+                    )}
                     {editable && (
                       <button
                         type="button"
@@ -383,20 +461,33 @@ export const GuruPage: React.FC = () => {
       >
         {detailGuru && (
           <div className="space-y-6">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 pb-5 border-b border-slate-200 dark:border-slate-800">
-              <Avatar src={detailGuru.foto} name={detailGuru.nama} size="xl" />
-              <div className="space-y-1">
-                <p className="text-lg font-display font-bold text-slate-900 dark:text-slate-100">
-                  {detailGuru.nama}
-                </p>
-                <p className="text-xs font-mono-num text-slate-600 dark:text-slate-400">
-                  NIP: {detailGuru.nip || '-'} · NUPTK: {detailGuru.nuptk || '-'}
-                </p>
-                <p className="text-xs text-teal-700 dark:text-teal-400 font-semibold">
-                  Mengampu: {detailGuru.mapelDiampu.join(', ')} (Kelas {detailGuru.kelasDiampu.join(', ')}) ·{' '}
-                  {detailGuru.jamMengajar} JP/minggu
-                </p>
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-5 border-b border-slate-200 dark:border-slate-800">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+                <Avatar src={detailGuru.foto} name={detailGuru.nama} size="xl" />
+                <div className="space-y-1">
+                  <p className="text-lg font-display font-bold text-slate-900 dark:text-slate-100">
+                    {detailGuru.nama}
+                  </p>
+                  <p className="text-xs font-mono-num text-slate-600 dark:text-slate-400">
+                    NIP: {detailGuru.nip || '-'} · NUPTK: {detailGuru.nuptk || '-'}
+                  </p>
+                  <p className="text-xs text-teal-700 dark:text-teal-400 font-semibold">
+                    Mengampu: {detailGuru.mapelDiampu.join(', ')} (Kelas {detailGuru.kelasDiampu.join(', ')}) ·{' '}
+                    {detailGuru.jamMengajar} JP/minggu
+                  </p>
+                </div>
               </div>
+              {isAdmin && (
+                <button
+                  type="button"
+                  disabled={downloadingGuruId === detailGuru.id}
+                  onClick={() => handleDownloadSingleGuru(detailGuru)}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold shrink-0 disabled:opacity-50 cursor-pointer"
+                >
+                  <FileDown className="w-4 h-4" />
+                  {downloadingGuruId === detailGuru.id ? 'Menyiapkan...' : 'Download Profil Lengkap (PDF)'}
+                </button>
+              )}
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
@@ -732,7 +823,7 @@ export const GuruPage: React.FC = () => {
             <div>
               <label className="block text-xs font-semibold mb-2">Mata Pelajaran yang Diampu</label>
               <div className="flex flex-wrap gap-2">
-                {DAFTAR_MAPEL.map((m) => {
+                {state.subjects.map((m) => {
                   const checked = form.mapelDiampu.includes(m);
                   return (
                     <button

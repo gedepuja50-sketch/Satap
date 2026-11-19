@@ -3,7 +3,7 @@
 import React, {useState} from 'react';
 import {ImagePlus, KeyRound, Moon, RotateCcw, Save, SlidersHorizontal, Sun} from 'lucide-react';
 import {useSchool} from '../context/SchoolContext';
-import {DAFTAR_MAPEL, GradeSettings} from '../types/school';
+import {GradeSettings} from '../types/school';
 
 export const PengaturanPage: React.FC = () => {
   const {
@@ -363,7 +363,7 @@ export const PengaturanPage: React.FC = () => {
                 <div>
                   <p className="text-xs font-semibold mb-2">KKM per Mata Pelajaran</p>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
-                    {DAFTAR_MAPEL.map((m) => (
+                    {state.subjects.map((m) => (
                       <div key={m} className="flex items-center justify-between gap-2 text-xs">
                         <span className="truncate text-slate-700 dark:text-slate-300">{m}</span>
                         <input

@@ -23,7 +23,6 @@ import {
   saveMediaFile,
 } from '../services/mediaDb';
 import {
-  DAFTAR_MAPEL,
   Guru,
   GuruCertificate,
   GuruCustomField,
@@ -588,7 +587,7 @@ export const ProfilSayaPage: React.FC = () => {
             <div>
               <label className="block text-xs font-semibold mb-2">Mata Pelajaran yang Diampu</label>
               <div className="flex flex-wrap gap-2">
-                {DAFTAR_MAPEL.map((m) => {
+                {state.subjects.map((m) => {
                   const checked = form.mapelDiampu.includes(m);
                   return (
                     <button

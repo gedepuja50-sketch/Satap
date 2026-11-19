@@ -5,11 +5,11 @@
 
 // Titik masuk utama aplikasi Sistem Manajemen Sekolah SMPN Satu Atap Besakih
 
-import React, {useEffect, useState} from 'react';
+import React, {useEffect, useRef, useState} from 'react';
 import {SchoolProvider, useSchool} from './context/SchoolContext';
 import {LoginPage} from './components/LoginPage';
 import {Layout} from './components/Layout';
-import {MenuKey} from './types/school';
+import {MenuKey, UserAccount} from './types/school';
 import {BerandaPage} from './pages/BerandaPage';
 import {ProfilSayaPage} from './pages/ProfilSayaPage';
 import {GuruPage} from './pages/GuruPage';
@@ -23,19 +23,57 @@ import {PrestasiPage} from './pages/PrestasiPage';
 import {PanelAdminPage} from './pages/PanelAdminPage';
 import {PengaturanPage} from './pages/PengaturanPage';
 
-const GURU_ALLOWED_MENUS: MenuKey[] = ['beranda', 'profil-saya', 'nilai-siswa', 'administrasi-guru'];
+function getAllowedMenus(user: UserAccount): MenuKey[] {
+  if (user.role === 'ADMIN') {
+    return [
+      'beranda',
+      'profil-saya',
+      'guru',
+      'kepala-sekolah',
+      'staf',
+      'siswa',
+      'nilai-siswa',
+      'administrasi-guru',
+      'sarana-prasarana',
+      'prestasi',
+      'panel-admin',
+      'pengaturan',
+    ];
+  }
+  if (user.role === 'GURU') {
+    const menus: MenuKey[] = ['beranda', 'profil-saya', 'nilai-siswa', 'administrasi-guru'];
+    if (user.aksesSarpras) menus.push('sarana-prasarana');
+    return menus;
+  }
+  // Peran STAF
+  const stafMenus: MenuKey[] = ['beranda', 'staf'];
+  if (user.aksesSarpras) stafMenus.push('sarana-prasarana');
+  return stafMenus;
+}
 
 const AppRouter: React.FC = () => {
   const {currentUser} = useSchool();
   const [activeMenu, setActiveMenu] = useState<MenuKey>('beranda');
+  const lastUserIdRef = useRef<string | null>(null);
 
-  // Pastikan peran GURU selalu berada pada menu yang diizinkan (Beranda, Profil Saya, Nilai Siswa, Administrasi Guru)
+  // Saat pengguna baru masuk: jika mendapat tugas input Sarana & Prasarana, langsung arahkan ke menu Sarana & Prasarana
   useEffect(() => {
-    if (!currentUser) return;
-    if (currentUser.role === 'GURU' && !GURU_ALLOWED_MENUS.includes(activeMenu)) {
+    if (!currentUser) {
+      lastUserIdRef.current = null;
+      return;
+    }
+    const allowed = getAllowedMenus(currentUser);
+    if (lastUserIdRef.current !== currentUser.id) {
+      lastUserIdRef.current = currentUser.id;
+      if (currentUser.role !== 'ADMIN' && currentUser.aksesSarpras) {
+        setActiveMenu('sarana-prasarana');
+        return;
+      }
       setActiveMenu('beranda');
-    } else if (currentUser.role === 'ADMIN' && !activeMenu) {
-      setActiveMenu('beranda');
+      return;
+    }
+    if (!allowed.includes(activeMenu)) {
+      setActiveMenu(currentUser.role !== 'ADMIN' && currentUser.aksesSarpras ? 'sarana-prasarana' : 'beranda');
     }
   }, [currentUser, activeMenu]);
 
@@ -43,26 +81,14 @@ const AppRouter: React.FC = () => {
     return <LoginPage />;
   }
 
-  const resolvedMenu: MenuKey =
-    currentUser.role === 'GURU' && !GURU_ALLOWED_MENUS.includes(activeMenu)
-      ? 'beranda'
-      : activeMenu;
+  const allowedMenus = getAllowedMenus(currentUser);
+  const resolvedMenu: MenuKey = allowedMenus.includes(activeMenu)
+    ? activeMenu
+    : currentUser.role !== 'ADMIN' && currentUser.aksesSarpras
+      ? 'sarana-prasarana'
+      : 'beranda';
 
   const renderPage = () => {
-    if (currentUser.role === 'GURU') {
-      switch (resolvedMenu) {
-        case 'profil-saya':
-          return <ProfilSayaPage />;
-        case 'nilai-siswa':
-          return <NilaiSiswaPage />;
-        case 'administrasi-guru':
-          return <AdministrasiGuruPage />;
-        case 'beranda':
-        default:
-          return <BerandaPage onNavigate={setActiveMenu} />;
-      }
-    }
-
     switch (resolvedMenu) {
       case 'beranda':
         return <BerandaPage onNavigate={setActiveMenu} />;

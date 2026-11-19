@@ -4,13 +4,18 @@
 
 import React, {useEffect, useMemo, useState} from 'react';
 import {
+  AlertCircle,
   Award,
   BookOpen,
   CalendarDays,
+  CheckCircle2,
   ClipboardList,
+  Clock,
   Download,
   Edit3,
+  FileDown,
   FileSpreadsheet,
+  Layers,
   Lock,
   MessageSquareText,
   Plus,
@@ -20,18 +25,36 @@ import {
 } from 'lucide-react';
 import {useSchool} from '../context/SchoolContext';
 import {
-  DAFTAR_MAPEL,
   EkskulItem,
   KelasLevel,
   NilaiRecord,
   Siswa,
   StudentRaporExtras,
 } from '../types/school';
-import {exportNilaiExcel, exportNilaiPdf, NilaiRowExport} from '../utils/exportUtils';
-import {hitungRataDaftar, hitungRataRata} from '../utils/gradeUtils';
+import {
+  exportClassRaporExcel,
+  exportClassRaporPdf,
+  exportNilaiExcel,
+  exportNilaiPdf,
+  exportStudentRaporPdf,
+  NilaiRowExport,
+} from '../utils/exportUtils';
+import {
+  evaluateStudentPromotionStatus,
+  getPredikatNilai,
+  hitungRataDaftar,
+  hitungRataRata,
+  StudentPromotionResult,
+} from '../utils/gradeUtils';
 import {EmptyState, Modal} from '../components/ui/AvatarAndModal';
 
-type NilaiSubTab = 'ringkasan' | 'tugas' | 'keseharian' | 'ujian-catatan' | 'ekskul';
+type NilaiSubTab =
+  | 'ringkasan'
+  | 'tugas'
+  | 'keseharian'
+  | 'ujian-catatan'
+  | 'ekskul'
+  | 'nilai-akhir-ekskul';
 
 interface EditableScores {
   tugasList: string[];
@@ -92,10 +115,10 @@ export const NilaiSiswaPage: React.FC = () => {
   } = useSchool();
 
   const isAdmin = currentUser?.role === 'ADMIN';
-  const {nilaiRecords, studentRaporExtras, gradeSettings, schoolProfile, periods} = state;
+  const {nilaiRecords, studentRaporExtras, gradeSettings, schoolProfile, periods, subjects} = state;
 
   const defaultMapel =
-    currentGuru && currentGuru.mapelDiampu.length > 0 ? currentGuru.mapelDiampu[0] : DAFTAR_MAPEL[0];
+    currentGuru && currentGuru.mapelDiampu.length > 0 ? currentGuru.mapelDiampu[0] : subjects[0] || '';
 
   const [activeSubTab, setActiveSubTab] = useState<NilaiSubTab>('ringkasan');
   const [selectedKelas, setSelectedKelas] = useState<KelasLevel>('7');
@@ -113,6 +136,7 @@ export const NilaiSiswaPage: React.FC = () => {
   const [izinDraft, setIzinDraft] = useState<number>(0);
   const [alpaDraft, setAlpaDraft] = useState<number>(0);
   const [catatanWaliDraft, setCatatanWaliDraft] = useState<string>('');
+  const [selectedCombinedSiswaId, setSelectedCombinedSiswaId] = useState<string>('');
 
   const canEditMapel = useMemo(() => {
     if (isAdmin) return true;
@@ -168,6 +192,9 @@ export const NilaiSiswaPage: React.FC = () => {
     });
     setDraftScores(nextDraft);
     setKkmDraft(gradeSettings.kkmPerMapel[selectedMapel] ?? 75);
+    setSelectedCombinedSiswaId((prev) =>
+      siswaKelas.some((s) => s.id === prev) ? prev : siswaKelas[0]?.id || ''
+    );
   }, [siswaKelas, nilaiRecords, selectedPeriod.id, selectedMapel, gradeSettings.kkmPerMapel]);
 
   const activeKkm = gradeSettings.kkmPerMapel[selectedMapel] ?? 75;
@@ -303,6 +330,90 @@ export const NilaiSiswaPage: React.FC = () => {
     });
   }, [siswaKelas, draftScores, gradeSettings, activeKkm]);
 
+  // Evaluasi status kenaikan kelas / kelulusan otomatis (hanya berlaku di Semester Genap)
+  // Versi live menggabungkan draftScores mapel aktif agar perubahan nilai langsung terlihat sebelum disimpan
+  const livePromotionMap = useMemo(() => {
+    const mergedRecords = nilaiRecords.filter(
+      (n) =>
+        !(
+          n.periodId === selectedPeriod.id &&
+          n.mapel === selectedMapel &&
+          siswaKelas.some((s) => s.id === n.siswaId)
+        )
+    );
+    siswaKelas.forEach((s) => {
+      const d = draftScores[s.id];
+      const tugasNums = (d?.tugasList || []).map(parseScore);
+      const harianNums = (d?.keseharianList || []).map(parseScore);
+      mergedRecords.push({
+        id: `live-${selectedPeriod.id}-${s.id}-${selectedMapel}`,
+        periodId: selectedPeriod.id,
+        siswaId: s.id,
+        kelas: selectedKelas,
+        mapel: selectedMapel,
+        semester: selectedPeriod.semester,
+        tahunAjaran: selectedPeriod.tahunAjaran,
+        tugasList: tugasNums,
+        keseharianList: harianNums,
+        tugas: hitungRataDaftar(tugasNums),
+        keseharian: hitungRataDaftar(harianNums),
+        uts: parseScore(d?.uts || ''),
+        uas: parseScore(d?.uas || ''),
+        catatanGuru: d?.catatanGuru || '',
+        updatedBy: currentUser?.namaLengkap || 'Guru',
+        updatedAt: '',
+      });
+    });
+
+    const map: Record<string, StudentPromotionResult> = {};
+    siswaKelas.forEach((s) => {
+      map[s.id] = evaluateStudentPromotionStatus(
+        s,
+        selectedPeriod,
+        subjects,
+        mergedRecords,
+        gradeSettings
+      );
+    });
+    return map;
+  }, [
+    nilaiRecords,
+    selectedPeriod,
+    selectedMapel,
+    selectedKelas,
+    siswaKelas,
+    draftScores,
+    subjects,
+    gradeSettings,
+    currentUser,
+  ]);
+
+  // Versi tersimpan untuk tab gabungan 1 kertas PDF & pratinjau rapor
+  const savedPromotionMap = useMemo(() => {
+    const map: Record<string, StudentPromotionResult> = {};
+    siswaKelas.forEach((s) => {
+      map[s.id] = evaluateStudentPromotionStatus(
+        s,
+        selectedPeriod,
+        subjects,
+        nilaiRecords,
+        gradeSettings
+      );
+    });
+    return map;
+  }, [siswaKelas, selectedPeriod, subjects, nilaiRecords, gradeSettings]);
+
+  const promotionSummaryCounts = useMemo(() => {
+    const sourceMap =
+      activeSubTab === 'nilai-akhir-ekskul' ? savedPromotionMap : livePromotionMap;
+    const list = Object.values(sourceMap);
+    return {
+      memenuhi: list.filter((p) => p.code === 'NAIK_KELAS' || p.code === 'LULUS').length,
+      belumMemenuhi: list.filter((p) => p.code === 'BELUM_MEMENUHI').length,
+      belumLengkap: list.filter((p) => p.code === 'BELUM_LENGKAP').length,
+    };
+  }, [activeSubTab, savedPromotionMap, livePromotionMap]);
+
   const handleSaveAll = () => {
     if (!canEditMapel) {
       showToast('Anda hanya dapat mengubah nilai pada mata pelajaran yang Anda ampu.', 'warning');
@@ -395,6 +506,77 @@ export const NilaiSiswaPage: React.FC = () => {
       `Mengunduh Excel nilai ${selectedMapel} Kelas ${selectedKelas} (${selectedPeriod.label}).`
     );
     showToast('File Excel (.xlsx) nilai berhasil diunduh.', 'success');
+  };
+
+  // Unduh Gabungan Nilai Akhir (Semua Mapel) + Ekstrakurikuler dalam 1 Kertas PDF per Siswa
+  const handleDownloadStudentCombinedPdf = async (siswa: Siswa) => {
+    await exportStudentRaporPdf(
+      siswa,
+      selectedPeriod,
+      schoolProfile,
+      nilaiRecords,
+      studentRaporExtras,
+      gradeSettings,
+      state.kepalaSekolah,
+      subjects,
+      {
+        headingTitle: 'LAPORAN NILAI AKHIR & EKSTRAKURIKULER SISWA',
+        filePrefix: 'Nilai_Akhir_Ekskul',
+      }
+    );
+    addLog(
+      'EXPORT',
+      'Nilai Akhir + Ekskul PDF',
+      `Mengunduh gabungan Nilai Akhir semua mapel & Ekskul (1 kertas PDF) untuk ${siswa.nama} (${selectedPeriod.label}).`
+    );
+    showToast(`Nilai Akhir & Ekskul ${siswa.nama} (1 kertas PDF) berhasil diunduh.`, 'success');
+  };
+
+  const handleDownloadClassCombinedPdf = async () => {
+    if (siswaKelas.length === 0) return;
+    await exportClassRaporPdf(
+      selectedKelas,
+      siswaKelas,
+      selectedPeriod,
+      schoolProfile,
+      nilaiRecords,
+      studentRaporExtras,
+      gradeSettings,
+      state.kepalaSekolah,
+      subjects,
+      {
+        headingTitle: 'LAPORAN NILAI AKHIR & EKSTRAKURIKULER SISWA',
+        filePrefix: 'Nilai_Akhir_Ekskul',
+      }
+    );
+    addLog(
+      'EXPORT',
+      'Nilai Akhir + Ekskul Kelas PDF',
+      `Mengunduh PDF gabungan Nilai Akhir + Ekskul seluruh siswa Kelas ${selectedKelas} (${selectedPeriod.label}).`
+    );
+    showToast(
+      `PDF Nilai Akhir & Ekskul Kelas ${selectedKelas} (1 kertas per siswa) berhasil diunduh.`,
+      'success'
+    );
+  };
+
+  const handleDownloadClassCombinedExcel = () => {
+    if (siswaKelas.length === 0) return;
+    exportClassRaporExcel(
+      selectedKelas,
+      siswaKelas,
+      selectedPeriod,
+      nilaiRecords,
+      studentRaporExtras,
+      gradeSettings,
+      subjects
+    );
+    addLog(
+      'EXPORT',
+      'Nilai Akhir + Ekskul Excel',
+      `Mengunduh rekap Excel Nilai Akhir + Ekskul Kelas ${selectedKelas} (${selectedPeriod.label}).`
+    );
+    showToast(`Rekap Excel Nilai Akhir & Ekskul Kelas ${selectedKelas} berhasil diunduh.`, 'success');
   };
 
   // Helper Ekstrakurikuler & Catatan Wali
@@ -493,12 +675,22 @@ export const NilaiSiswaPage: React.FC = () => {
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
+            disabled={siswaKelas.length === 0}
+            onClick={handleDownloadClassCombinedPdf}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold transition-colors disabled:opacity-50 cursor-pointer"
+            title="Gabungkan semua Nilai Akhir mapel dan Nilai Ekstrakurikuler menjadi 1 kertas PDF per siswa"
+          >
+            <FileDown className="w-4 h-4" />
+            PDF Nilai Akhir + Ekskul (1 Kertas/Siswa)
+          </button>
+          <button
+            type="button"
             disabled={computedRows.length === 0}
             onClick={handleDownloadPdf}
             className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:border-teal-600/50 disabled:opacity-50 cursor-pointer"
           >
             <Download className="w-4 h-4 text-amber-500" />
-            Download PDF
+            PDF Mapel Ini
           </button>
           <button
             type="button"
@@ -507,7 +699,7 @@ export const NilaiSiswaPage: React.FC = () => {
             className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:border-teal-600/50 disabled:opacity-50 cursor-pointer"
           >
             <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
-            Download Excel
+            Excel Mapel
           </button>
           {isAdmin && (
             <button
@@ -519,16 +711,19 @@ export const NilaiSiswaPage: React.FC = () => {
               Atur KKM ({activeKkm})
             </button>
           )}
-          {canEditMapel && siswaKelas.length > 0 && activeSubTab !== 'ekskul' && (
-            <button
-              type="button"
-              onClick={handleSaveAll}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-sm font-semibold transition-colors cursor-pointer"
-            >
-              <Save className="w-4 h-4" />
-              Simpan Nilai Mapel
-            </button>
-          )}
+          {canEditMapel &&
+            siswaKelas.length > 0 &&
+            activeSubTab !== 'ekskul' &&
+            activeSubTab !== 'nilai-akhir-ekskul' && (
+              <button
+                type="button"
+                onClick={handleSaveAll}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-sm font-semibold transition-colors cursor-pointer"
+              >
+                <Save className="w-4 h-4" />
+                Simpan Nilai Mapel
+              </button>
+            )}
         </div>
       </div>
 
@@ -582,7 +777,7 @@ export const NilaiSiswaPage: React.FC = () => {
             onChange={(e) => setSelectedMapel(e.target.value)}
             className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-sm font-medium"
           >
-            {DAFTAR_MAPEL.map((m) => {
+            {subjects.map((m) => {
               const isMine = isAdmin || currentGuru?.mapelDiampu.includes(m);
               return (
                 <option key={m} value={m}>
@@ -610,6 +805,7 @@ export const NilaiSiswaPage: React.FC = () => {
             {key: 'keseharian', label: `Nilai Keseharian (${harianColCount} Hari)`, icon: CalendarDays},
             {key: 'ujian-catatan', label: 'UTS, UAS & Catatan Guru', icon: MessageSquareText},
             {key: 'ekskul', label: 'Nilai Ekstrakurikuler', icon: Award},
+            {key: 'nilai-akhir-ekskul', label: 'Nilai Akhir & Ekskul (1 Kertas)', icon: Layers},
           ] as const
         ).map((tab) => {
           const Icon = tab.icon;
@@ -633,7 +829,7 @@ export const NilaiSiswaPage: React.FC = () => {
       </div>
 
       {/* Info Hak Akses Mapel */}
-      {activeSubTab !== 'ekskul' && !canEditMapel && (
+      {activeSubTab !== 'ekskul' && activeSubTab !== 'nilai-akhir-ekskul' && !canEditMapel && (
         <div className="rounded-2xl border border-amber-200 dark:border-amber-800/70 bg-amber-50 dark:bg-amber-950/30 p-4 flex items-center gap-3 text-sm text-amber-900 dark:text-amber-200">
           <Lock className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0" />
           <p>
@@ -643,8 +839,42 @@ export const NilaiSiswaPage: React.FC = () => {
         </div>
       )}
 
+      {/* Status Otomatis Kenaikan Kelas / Kelulusan (Khusus Semester Genap) */}
+      {siswaKelas.length > 0 &&
+        (selectedPeriod.semester === 'Genap' ? (
+          <div className="rounded-2xl border border-emerald-200 dark:border-emerald-800/60 bg-emerald-50/70 dark:bg-emerald-950/20 px-4 py-3 flex flex-col lg:flex-row lg:items-center justify-between gap-2 text-xs">
+            <div className="flex items-start gap-2.5 text-emerald-950 dark:text-emerald-200">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+              <span>
+                <strong>Semester Genap (Akhir Tahun Pelajaran):</strong> Status{' '}
+                <strong>{selectedKelas === '9' ? 'LULUS' : `NAIK KE KELAS ${selectedKelas === '7' ? '8' : '9'}`}</strong>{' '}
+                otomatis aktif apabila seluruh <strong>{subjects.length} mata pelajaran</strong> telah terisi dan memenuhi KKM.
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-3 font-mono-num shrink-0">
+              <span className="text-emerald-700 dark:text-emerald-400 font-semibold">
+                {selectedKelas === '9' ? 'Lulus' : 'Naik Kelas'}: {promotionSummaryCounts.memenuhi}
+              </span>
+              <span className="text-red-600 dark:text-red-400 font-semibold">
+                Belum Memenuhi: {promotionSummaryCounts.belumMemenuhi}
+              </span>
+              <span className="text-amber-700 dark:text-amber-400 font-semibold">
+                Belum Lengkap: {promotionSummaryCounts.belumLengkap}
+              </span>
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/70 px-4 py-2.5 flex items-center gap-2.5 text-xs text-slate-600 dark:text-slate-300">
+            <Clock className="w-4 h-4 text-slate-500 shrink-0" />
+            <span>
+              <strong>Periode Semester Ganjil:</strong> Penetapan otomatis status Naik Kelas / Lulus hanya diberlakukan pada{' '}
+              <strong>Semester Genap (akhir tahun pelajaran)</strong>.
+            </span>
+          </div>
+        ))}
+
       {/* Ringkasan Singkat Kelas */}
-      {activeSubTab !== 'ekskul' && (
+      {activeSubTab !== 'ekskul' && activeSubTab !== 'nilai-akhir-ekskul' && (
         <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-slate-600 dark:text-slate-400 px-1">
           <span>
             Pengampu: <strong className="text-slate-900 dark:text-slate-100">{guruPengampu?.nama || '-'}</strong>
@@ -714,13 +944,16 @@ export const NilaiSiswaPage: React.FC = () => {
                       <th className="py-3 px-3 text-center w-24">UTS ({gradeSettings.bobotUts}%)</th>
                       <th className="py-3 px-3 text-center w-24">UAS ({gradeSettings.bobotUas}%)</th>
                       <th className="py-3 px-3.5 text-center w-36">Nilai Akhir</th>
+                      <th className="py-3 px-3.5 text-center whitespace-nowrap">Status Akhir</th>
                       <th className="py-3 px-3.5">Catatan Guru</th>
+                      <th className="py-3 px-3.5 text-right whitespace-nowrap">Nilai Akhir + Ekskul</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                     {computedRows.map((row, idx) => {
                       const d = draftScores[row.siswaId];
                       const isTuntas = row.tuntas;
+                      const siswaObj = siswaKelas.find((x) => x.id === row.siswaId);
                       return (
                         <tr key={row.siswaId} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
                           <td className="py-2.5 px-3.5 text-center font-mono-num text-slate-500">{idx + 1}</td>
@@ -804,11 +1037,69 @@ export const NilaiSiswaPage: React.FC = () => {
                               </div>
                             )}
                           </td>
+                          <td className="py-2.5 px-3.5 text-center whitespace-nowrap">
+                            {(() => {
+                              const promo = livePromotionMap[row.siswaId];
+                              if (!promo) return null;
+                              if (promo.code === 'PROSES_GANJIL') {
+                                return (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-[11px] font-medium">
+                                    <Clock className="w-3 h-3" />
+                                    Proses (Ganjil)
+                                  </span>
+                                );
+                              }
+                              if (promo.code === 'NAIK_KELAS' || promo.code === 'LULUS') {
+                                return (
+                                  <span
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 text-[11px] font-bold"
+                                    title={`Seluruh ${promo.totalSubjects} mapel tuntas memenuhi KKM`}
+                                  >
+                                    <CheckCircle2 className="w-3.5 h-3.5" />
+                                    {promo.label}
+                                  </span>
+                                );
+                              }
+                              if (promo.code === 'BELUM_MEMENUHI') {
+                                return (
+                                  <span
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-red-100 dark:bg-red-950/60 text-red-700 dark:text-red-300 text-[11px] font-semibold"
+                                    title={`Mapel di bawah KKM: ${promo.belowKkmMapels.join(', ')}`}
+                                  >
+                                    <AlertCircle className="w-3.5 h-3.5" />
+                                    {promo.shortLabel}
+                                  </span>
+                                );
+                              }
+                              return (
+                                <span
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 text-[11px] font-semibold"
+                                  title={`Terisi ${promo.filledCount}/${promo.totalSubjects} mata pelajaran`}
+                                >
+                                  <Clock className="w-3 h-3" />
+                                  {promo.shortLabel}
+                                </span>
+                              );
+                            })()}
+                          </td>
                           <td className="py-2.5 px-3.5 text-xs text-slate-600 dark:text-slate-300 max-w-xs">
                             {row.catatanGuru ? (
                               <p className="line-clamp-2">{row.catatanGuru}</p>
                             ) : (
                               <span className="text-slate-400 italic">Belum ada catatan</span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3.5 text-right whitespace-nowrap">
+                            {siswaObj && (
+                              <button
+                                type="button"
+                                onClick={() => handleDownloadStudentCombinedPdf(siswaObj)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl border border-amber-300 dark:border-amber-700/70 bg-amber-50 dark:bg-amber-950/30 hover:bg-amber-100 text-amber-800 dark:text-amber-300 text-xs font-semibold cursor-pointer"
+                                title="Unduh gabungan Nilai Akhir semua mapel + Ekskul dalam 1 kertas PDF"
+                              >
+                                <FileDown className="w-3.5 h-3.5" />
+                                1 Kertas PDF
+                              </button>
                             )}
                           </td>
                         </tr>
@@ -1130,7 +1421,16 @@ export const NilaiSiswaPage: React.FC = () => {
                                 <span className="text-slate-400 italic">Belum ada catatan wali kelas</span>
                               )}
                             </td>
-                            <td className="py-3 px-3.5 text-right whitespace-nowrap">
+                            <td className="py-3 px-3.5 text-right whitespace-nowrap space-x-1.5">
+                              <button
+                                type="button"
+                                onClick={() => handleDownloadStudentCombinedPdf(s)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl border border-amber-300 dark:border-amber-700/70 bg-amber-50 dark:bg-amber-950/30 hover:bg-amber-100 text-amber-800 dark:text-amber-300 text-xs font-semibold cursor-pointer"
+                                title="Download gabungan Nilai Akhir semua mapel + Ekskul (1 kertas PDF)"
+                              >
+                                <FileDown className="w-3.5 h-3.5" />
+                                1 Kertas PDF
+                              </button>
                               <button
                                 type="button"
                                 onClick={() => openEkskulModal(s)}
@@ -1149,6 +1449,395 @@ export const NilaiSiswaPage: React.FC = () => {
               </div>
             </div>
           )}
+
+          {/* SUB-TAB 6: GABUNGAN NILAI AKHIR (SEMUA MAPEL) + EKSTRAKURIKULER DALAM 1 KERTAS PER SISWA */}
+          {activeSubTab === 'nilai-akhir-ekskul' && (() => {
+            const activeSiswa =
+              siswaKelas.find((s) => s.id === selectedCombinedSiswaId) || siswaKelas[0];
+            const activeExtra = activeSiswa ? getStudentExtras(activeSiswa.id) : undefined;
+            const activeStudentNilai = activeSiswa
+              ? nilaiRecords.filter(
+                  (n) => n.periodId === selectedPeriod.id && n.siswaId === activeSiswa.id
+                )
+              : [];
+
+            return (
+              <div className="space-y-5">
+                {/* Banner & Tombol Unduhan Gabungan */}
+                <div className="rounded-2xl border border-amber-200 dark:border-amber-800/60 bg-amber-50/70 dark:bg-amber-950/20 p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                  <div className="text-xs sm:text-sm text-amber-950 dark:text-amber-100">
+                    <p className="font-display font-bold">
+                      Gabungan Nilai Akhir Seluruh Mata Pelajaran &amp; Nilai Ekstrakurikuler (1 Kertas per Siswa)
+                    </p>
+                    <p className="text-xs text-amber-800 dark:text-amber-300 mt-0.5">
+                      Seluruh Nilai Akhir dari {subjects.length} mata pelajaran, nilai ekstrakurikuler, absensi, dan tanda tangan digabungkan rapi ke dalam <strong>1 halaman kertas A4</strong> per siswa saat diunduh.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={handleDownloadClassCombinedPdf}
+                      className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-xs font-semibold cursor-pointer"
+                    >
+                      <FileDown className="w-4 h-4" />
+                      Download Semua Siswa Kelas {selectedKelas} (PDF)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDownloadClassCombinedExcel}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
+                    >
+                      <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+                      Download Excel Gabungan
+                    </button>
+                  </div>
+                </div>
+
+                {/* Daftar Siswa Kelas untuk Unduh 1 Kertas PDF Satuan */}
+                <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden">
+                  <div className="px-4 py-3 border-b border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
+                    <h2 className="text-sm font-display font-semibold text-slate-900 dark:text-slate-100">
+                      Rekap Nilai Akhir Semua Mapel &amp; Ekskul — Kelas {selectedKelas} ({selectedPeriod.label})
+                    </h2>
+                    <span className="text-xs text-slate-500">
+                      Klik baris siswa untuk melihat pratinjau lengkap di bawah
+                    </span>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse text-sm">
+                      <thead>
+                        <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-xs font-semibold text-slate-600 dark:text-slate-300">
+                          <th className="py-3 px-3.5 text-center w-12">No</th>
+                          <th className="py-3 px-3.5">Nama Siswa</th>
+                          <th className="py-3 px-3.5 text-center">Mapel Terisi</th>
+                          <th className="py-3 px-3.5 text-center">Rata-rata Nilai Akhir</th>
+                          <th className="py-3 px-3.5">Ekstrakurikuler</th>
+                          <th className="py-3 px-3.5 text-center whitespace-nowrap">Status Kenaikan / Kelulusan</th>
+                          <th className="py-3 px-3.5 text-right">Download 1 Kertas</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                        {siswaKelas.map((s, idx) => {
+                          const sNilai = nilaiRecords.filter(
+                            (n) => n.periodId === selectedPeriod.id && n.siswaId === s.id
+                          );
+                          const finalScores = subjects
+                            .map((m) => {
+                              const rec = sNilai.find((n) => n.mapel === m);
+                              return rec ? hitungRataRata(rec, gradeSettings) : null;
+                            })
+                            .filter((v): v is number => v !== null);
+                          const overallAvg =
+                            finalScores.length > 0
+                              ? finalScores.reduce((a, b) => a + b, 0) / finalScores.length
+                              : null;
+                          const extra = getStudentExtras(s.id);
+                          const ekskuls = extra?.ekstrakurikuler || [];
+                          const isSelected = activeSiswa?.id === s.id;
+
+                          return (
+                            <tr
+                              key={s.id}
+                              onClick={() => setSelectedCombinedSiswaId(s.id)}
+                              className={`cursor-pointer transition-colors ${
+                                isSelected
+                                  ? 'bg-teal-50/70 dark:bg-teal-950/30'
+                                  : 'hover:bg-slate-50/70 dark:hover:bg-slate-800/40'
+                              }`}
+                            >
+                              <td className="py-2.5 px-3.5 text-center font-mono-num text-slate-500">
+                                {idx + 1}
+                              </td>
+                              <td className="py-2.5 px-3.5 whitespace-nowrap">
+                                <p className="font-semibold text-slate-900 dark:text-slate-100">
+                                  {s.nama}
+                                </p>
+                                <p className="text-[11px] font-mono-num text-slate-500">
+                                  NIS {s.nis}
+                                </p>
+                              </td>
+                              <td className="py-2.5 px-3.5 text-center font-mono-num text-xs">
+                                <span className="font-semibold text-slate-800 dark:text-slate-200">
+                                  {finalScores.length}
+                                </span>
+                                <span className="text-slate-400">/{subjects.length} mapel</span>
+                              </td>
+                              <td className="py-2.5 px-3.5 text-center font-mono-num">
+                                {overallAvg !== null ? (
+                                  <span className="font-bold text-teal-700 dark:text-teal-400">
+                                    {overallAvg.toFixed(1)}
+                                  </span>
+                                ) : (
+                                  <span className="text-xs text-slate-400">-</span>
+                                )}
+                              </td>
+                              <td className="py-2.5 px-3.5 text-xs">
+                                {ekskuls.length > 0 ? (
+                                  <span className="text-slate-700 dark:text-slate-300">
+                                    {ekskuls
+                                      .map((ex) => `${ex.namaEkskul} (${ex.predikat.split(' ')[0]})`)
+                                      .join(', ')}
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-400 italic">Belum ada ekskul</span>
+                                )}
+                              </td>
+                              <td className="py-2.5 px-3.5 text-center whitespace-nowrap">
+                                {(() => {
+                                  const promo = savedPromotionMap[s.id];
+                                  if (!promo) return null;
+                                  if (promo.code === 'PROSES_GANJIL') {
+                                    return (
+                                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-[11px] font-medium">
+                                        Proses (Ganjil)
+                                      </span>
+                                    );
+                                  }
+                                  if (promo.code === 'NAIK_KELAS' || promo.code === 'LULUS') {
+                                    return (
+                                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 text-[11px] font-bold">
+                                        <CheckCircle2 className="w-3.5 h-3.5" />
+                                        {promo.label}
+                                      </span>
+                                    );
+                                  }
+                                  if (promo.code === 'BELUM_MEMENUHI') {
+                                    return (
+                                      <span
+                                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-red-100 dark:bg-red-950/60 text-red-700 dark:text-red-300 text-[11px] font-semibold"
+                                        title={`Mapel di bawah KKM: ${promo.belowKkmMapels.join(', ')}`}
+                                      >
+                                        <AlertCircle className="w-3.5 h-3.5" />
+                                        {promo.shortLabel}
+                                      </span>
+                                    );
+                                  }
+                                  return (
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 text-[11px] font-semibold">
+                                      {promo.shortLabel}
+                                    </span>
+                                  );
+                                })()}
+                              </td>
+                              <td
+                                className="py-2.5 px-3.5 text-right whitespace-nowrap"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => handleDownloadStudentCombinedPdf(s)}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold cursor-pointer"
+                                >
+                                  <FileDown className="w-3.5 h-3.5" />
+                                  Download 1 Kertas (PDF)
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Pratinjau 1 Kertas Gabungan Nilai Akhir + Ekskul untuk Siswa Terpilih */}
+                {activeSiswa && (
+                  <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 space-y-4">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
+                      <div>
+                        <p className="text-xs uppercase tracking-wider font-semibold text-teal-700 dark:text-teal-400">
+                          Pratinjau Lembar Gabungan (1 Kertas A4)
+                        </p>
+                        <div className="flex flex-wrap items-center gap-2 mt-0.5">
+                          <h3 className="text-lg font-display font-bold text-slate-900 dark:text-slate-100">
+                            {activeSiswa.nama} · Kelas {activeSiswa.kelas}
+                          </h3>
+                          {(() => {
+                            const promo = savedPromotionMap[activeSiswa.id];
+                            if (!promo) return null;
+                            if (promo.code === 'NAIK_KELAS' || promo.code === 'LULUS') {
+                              return (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-xl bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 text-xs font-bold">
+                                  <CheckCircle2 className="w-3.5 h-3.5" />
+                                  {promo.label}
+                                </span>
+                              );
+                            }
+                            if (promo.code === 'BELUM_MEMENUHI') {
+                              return (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-xl bg-red-100 dark:bg-red-950/60 text-red-700 dark:text-red-300 text-xs font-semibold">
+                                  <AlertCircle className="w-3.5 h-3.5" />
+                                  {promo.label}
+                                </span>
+                              );
+                            }
+                            if (promo.code === 'BELUM_LENGKAP') {
+                              return (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-xl bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 text-xs font-semibold">
+                                  {promo.label}
+                                </span>
+                              );
+                            }
+                            return (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-xs font-medium">
+                                {promo.label}
+                              </span>
+                            );
+                          })()}
+                        </div>
+                        <p className="text-xs font-mono-num text-slate-500">
+                          NIS: {activeSiswa.nis} · NISN: {activeSiswa.nisn} · Periode: {selectedPeriod.label}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadStudentCombinedPdf(activeSiswa)}
+                        className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-xs font-semibold cursor-pointer shrink-0"
+                      >
+                        <Download className="w-4 h-4" />
+                        Download PDF {activeSiswa.nama} (1 Kertas)
+                      </button>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 font-semibold text-slate-600 dark:text-slate-300">
+                            <th className="py-2 px-2.5 text-center">No</th>
+                            <th className="py-2 px-2.5">Mata Pelajaran</th>
+                            <th className="py-2 px-2 text-center">KKM</th>
+                            <th className="py-2 px-2 text-center">Tugas</th>
+                            <th className="py-2 px-2 text-center">Harian</th>
+                            <th className="py-2 px-2 text-center">UTS</th>
+                            <th className="py-2 px-2 text-center">UAS</th>
+                            <th className="py-2 px-2.5 text-center">Nilai Akhir</th>
+                            <th className="py-2 px-2 text-center">Predikat</th>
+                            <th className="py-2 px-2.5">Catatan Guru</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                          {subjects.map((mapel, i) => {
+                            const rec = activeStudentNilai.find((n) => n.mapel === mapel);
+                            const kkm = gradeSettings.kkmPerMapel[mapel] ?? 75;
+                            const avgTugas = rec
+                              ? (hitungRataDaftar(rec.tugasList) ?? rec.tugas ?? null)
+                              : null;
+                            const avgHarian = rec
+                              ? (hitungRataDaftar(rec.keseharianList) ?? rec.keseharian ?? null)
+                              : null;
+                            const akhir = rec ? hitungRataRata(rec, gradeSettings) : null;
+                            const tuntas = akhir !== null ? akhir >= kkm : null;
+
+                            return (
+                              <tr key={mapel}>
+                                <td className="py-1.5 px-2.5 text-center font-mono-num text-slate-500">
+                                  {i + 1}
+                                </td>
+                                <td className="py-1.5 px-2.5 font-medium text-slate-800 dark:text-slate-200">
+                                  {mapel}
+                                </td>
+                                <td className="py-1.5 px-2 text-center font-mono-num">{kkm}</td>
+                                <td className="py-1.5 px-2 text-center font-mono-num">
+                                  {avgTugas !== null ? avgTugas.toFixed(1) : '-'}
+                                </td>
+                                <td className="py-1.5 px-2 text-center font-mono-num">
+                                  {avgHarian !== null ? avgHarian.toFixed(1) : '-'}
+                                </td>
+                                <td className="py-1.5 px-2 text-center font-mono-num">
+                                  {rec?.uts ?? '-'}
+                                </td>
+                                <td className="py-1.5 px-2 text-center font-mono-num">
+                                  {rec?.uas ?? '-'}
+                                </td>
+                                <td
+                                  className={`py-1.5 px-2.5 text-center font-mono-num font-bold ${
+                                    tuntas === null
+                                      ? 'text-slate-400'
+                                      : tuntas
+                                        ? 'text-emerald-600 dark:text-emerald-400'
+                                        : 'text-red-600 dark:text-red-400'
+                                  }`}
+                                >
+                                  {akhir !== null ? akhir.toFixed(1) : '-'}
+                                </td>
+                                <td className="py-1.5 px-2 text-center font-semibold">
+                                  {akhir !== null ? getPredikatNilai(akhir).split(' ')[0] : '-'}
+                                </td>
+                                <td className="py-1.5 px-2.5 text-slate-600 dark:text-slate-300">
+                                  {rec?.catatanGuru || '-'}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Bagian B & C pada 1 kertas yang sama */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-slate-200 dark:border-slate-800">
+                      <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-3.5">
+                        <h4 className="text-xs font-display font-bold text-teal-700 dark:text-teal-400 mb-2">
+                          B. Nilai Ekstrakurikuler
+                        </h4>
+                        {activeExtra?.ekstrakurikuler?.length ? (
+                          <div className="space-y-1.5 text-xs">
+                            {activeExtra.ekstrakurikuler.map((ex, idx) => (
+                              <div key={ex.id} className="flex justify-between gap-2">
+                                <span className="font-medium">
+                                  {idx + 1}. {ex.namaEkskul}
+                                </span>
+                                <span className="font-semibold text-amber-700 dark:text-amber-400 whitespace-nowrap">
+                                  {ex.predikat}
+                                  {ex.nilaiAngka !== null && ex.nilaiAngka !== undefined
+                                    ? ` (${ex.nilaiAngka})`
+                                    : ''}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-xs text-slate-400 italic">
+                            Belum ada ekstrakurikuler diisi.
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-3.5 text-xs space-y-1.5">
+                        <h4 className="text-xs font-display font-bold text-teal-700 dark:text-teal-400">
+                          C. Ketidakhadiran, Catatan Wali Kelas &amp; Keputusan Akhir
+                        </h4>
+                        <p className="font-mono-num text-slate-700 dark:text-slate-300">
+                          Sakit: <strong>{activeExtra?.sakit ?? 0} hari</strong> · Izin:{' '}
+                          <strong>{activeExtra?.izin ?? 0} hari</strong> · Alpa:{' '}
+                          <strong>{activeExtra?.alpa ?? 0} hari</strong>
+                        </p>
+                        <p className="text-slate-600 dark:text-slate-300">
+                          Catatan: {activeExtra?.catatanWaliKelas || '-'}
+                        </p>
+                        {selectedPeriod.semester === 'Genap' && savedPromotionMap[activeSiswa.id] && (
+                          <p className="pt-1 border-t border-slate-100 dark:border-slate-800 font-semibold text-slate-800 dark:text-slate-100">
+                            Keputusan Akhir (Semester Genap):{' '}
+                            <span
+                              className={
+                                savedPromotionMap[activeSiswa.id].code === 'NAIK_KELAS' ||
+                                savedPromotionMap[activeSiswa.id].code === 'LULUS'
+                                  ? 'text-emerald-700 dark:text-emerald-400'
+                                  : savedPromotionMap[activeSiswa.id].code === 'BELUM_MEMENUHI'
+                                    ? 'text-red-600 dark:text-red-400'
+                                    : 'text-amber-700 dark:text-amber-400'
+                              }
+                            >
+                              {savedPromotionMap[activeSiswa.id].label}
+                            </span>
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         </>
       )}
 

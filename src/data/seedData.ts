@@ -10,6 +10,7 @@ import {
   Guru,
   GuruCertificate,
   KelasLevel,
+  LoginConfig,
   NilaiRecord,
   Prestasi,
   SaranaAsset,
@@ -65,6 +66,48 @@ const accounts: UserAccount[] = [
   {id: 'usr-guru-6', username: 'guru6', password: 'guru123', role: 'GURU', namaLengkap: 'Ni Made Dwi Cahyani, S.Pd.H.', active: true, guruId: 'guru-6'},
   {id: 'usr-guru-7', username: 'guru7', password: 'guru123', role: 'GURU', namaLengkap: 'I Nyoman Putra Wijaya, S.Or.', active: true, guruId: 'guru-7'},
   {id: 'usr-guru-8', username: 'guru8', password: 'guru123', role: 'GURU', namaLengkap: 'Ni Wayan Eka Purnami, S.Kom.', active: true, guruId: 'guru-8'},
+  {
+    id: 'usr-staf-1',
+    username: 'staf1',
+    password: 'staf123',
+    role: 'STAF',
+    namaLengkap: 'I Ketut Sukarma',
+    active: true,
+    stafId: 'staf-1',
+    aksesSarpras: true,
+    tugasTambahan: 'Input Data Sarana & Prasarana Sekolah',
+  },
+  {
+    id: 'usr-staf-2',
+    username: 'staf2',
+    password: 'staf123',
+    role: 'STAF',
+    namaLengkap: 'Ni Putu Rismawati, A.Md.',
+    active: true,
+    stafId: 'staf-2',
+    aksesSarpras: true,
+    tugasTambahan: 'Operator BOS & Inventaris Sarpras',
+  },
+  {
+    id: 'usr-staf-3',
+    username: 'staf3',
+    password: 'staf123',
+    role: 'STAF',
+    namaLengkap: 'I Made Subawa',
+    active: true,
+    stafId: 'staf-3',
+    aksesSarpras: false,
+  },
+  {
+    id: 'usr-staf-4',
+    username: 'staf4',
+    password: 'staf123',
+    role: 'STAF',
+    namaLengkap: 'I Wayan Gede Sutama',
+    active: true,
+    stafId: 'staf-4',
+    aksesSarpras: false,
+  },
 ];
 
 const baseGurusActive: Guru[] = [
@@ -473,17 +516,7 @@ baseGurusActive.forEach((g) => {
 });
 
 const nilaiRecords: NilaiRecord[] = [];
-const seededMapels = [
-  'Matematika',
-  'Bahasa Indonesia',
-  'IPA',
-  'Bahasa Inggris',
-  'IPS',
-  'Informatika',
-  'Pendidikan Agama',
-  'PJOK',
-  'Bahasa Bali',
-];
+const seededMapels = [...DAFTAR_MAPEL];
 
 // Nilai periode aktif 2026/2027 Ganjil
 const sampleTeacherNotes = [
@@ -548,13 +581,15 @@ siswasActive.forEach((s, sIdx) => {
   });
 });
 
-// Nilai historis periode 2025/2026 Genap
+// Nilai historis periode 2025/2026 Genap (seluruh 12 mapel terisi; mayoritas >= KKM -> otomatis Naik Kelas / Lulus)
 siswasHist.forEach((s, sIdx) => {
-  ['Matematika', 'Bahasa Indonesia', 'IPA', 'Bahasa Inggris', 'Informatika'].forEach((mapel, mIdx) => {
+  seededMapels.forEach((mapel, mIdx) => {
     const pengampu = mapelPengampuLookup.get(mapel);
-    const base = 76 + ((sIdx * 5 + mIdx * 4) % 19);
-    const tVal = Math.min(96, base + 2);
-    const kVal = Math.min(95, base + 1);
+    // Berikan contoh 1 siswa di Kelas 7 dengan 1 nilai di bawah KKM agar variasi status terlihat jelas
+    const isRemedialSample = s.kelas === '7' && sIdx === 3 && mapel === 'Matematika';
+    const base = isRemedialSample ? 68 : 79 + ((sIdx * 5 + mIdx * 4) % 17);
+    const tVal = isRemedialSample ? 69 : Math.min(96, base + 2);
+    const kVal = isRemedialSample ? 70 : Math.min(95, base + 1);
     nilaiRecords.push({
       id: `nil-${PERIOD_HIST_ID}-${s.id}-${mapel}`,
       periodId: PERIOD_HIST_ID,
@@ -569,9 +604,11 @@ siswasHist.forEach((s, sIdx) => {
       keseharianList: [kVal, kVal, null, null, null, null, null, null, null, null],
       tugas: tVal,
       keseharian: kVal,
-      uts: Math.min(95, base),
-      uas: Math.min(98, base + 3),
-      catatanGuru: sampleTeacherNotes[(sIdx + mIdx) % sampleTeacherNotes.length],
+      uts: isRemedialSample ? 66 : Math.min(95, base),
+      uas: isRemedialSample ? 68 : Math.min(98, base + 3),
+      catatanGuru: isRemedialSample
+        ? 'Perlu mengikuti program remedial Matematika sebelum penetapan kenaikan kelas.'
+        : sampleTeacherNotes[(sIdx + mIdx) % sampleTeacherNotes.length],
       updatedBy: pengampu?.nama || 'Sistem Awal',
       updatedAt: '2026-06-12T10:00:00.000Z',
     });
@@ -978,6 +1015,30 @@ export function createInitialSeedState(): SchoolDatabaseState {
         'Meningkatkan kompetensi pendidik serta pemanfaatan teknologi informasi dalam administrasi dan pembelajaran.',
       ],
     },
+    loginConfig: {
+      bannerTagline: 'Sistem Informasi & Manajemen Sekolah Terpadu',
+      bannerHeadline: 'SMPN Satu Atap Besakih',
+      bannerSubtext:
+        'Br. Dinas Kedungdung, Desa Besakih, Kec. Rendang, Kab. Karangasem, Bali · NPSN 50104110',
+      guruSectionTitle: 'Profil Pendidik (Guru) & Akun Demo Uji Coba',
+      guruSectionSubtitle:
+        'Klik bar guru untuk melihat Profil & Administrasi Guru (hanya tampil), atau tekan "Isi Login" untuk masuk.',
+      formTitle: 'Masuk ke Sistem',
+      formSubtitle: 'Gunakan akun Admin, Guru, atau Staf yang terdaftar',
+      footerNote:
+        'Seluruh data tersimpan otomatis di browser Anda (localStorage & IndexedDB) agar tetap aman saat halaman dimuat ulang.',
+      showDemoCredentials: true,
+      notes: [
+        {
+          id: 'lnote-1',
+          judul: 'Jadwal Kelengkapan Nilai & Administrasi Guru',
+          isi: 'Bapak/Ibu Guru dimohon melengkapi nilai tugas (T1–T10), keseharian, UTS, UAS, serta unggahan dokumen Administrasi Guru dalam format PDF sebelum batas akhir semester.',
+          kategori: 'Penting',
+          tanggal: '2026-11-19',
+        },
+      ],
+    } satisfies LoginConfig,
+    subjects: [...DAFTAR_MAPEL],
     accounts,
     announcements,
     gurus,

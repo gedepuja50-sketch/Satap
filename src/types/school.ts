@@ -1,6 +1,6 @@
 // Tipe data utama Sistem Manajemen Sekolah SMPN Satu Atap Besakih
 
-export type UserRole = 'ADMIN' | 'GURU';
+export type UserRole = 'ADMIN' | 'GURU' | 'STAF';
 
 export type KelasLevel = '7' | '8' | '9';
 
@@ -90,6 +90,27 @@ export interface SchoolProfile {
   misi: string[];
 }
 
+export interface LoginNote {
+  id: string;
+  judul: string;
+  isi: string;
+  kategori: 'Info' | 'Penting' | 'Jadwal';
+  tanggal: string;
+}
+
+export interface LoginConfig {
+  bannerTagline: string;
+  bannerHeadline: string;
+  bannerSubtext: string;
+  guruSectionTitle: string;
+  guruSectionSubtitle: string;
+  formTitle: string;
+  formSubtitle: string;
+  footerNote: string;
+  showDemoCredentials: boolean;
+  notes: LoginNote[];
+}
+
 export interface UserAccount {
   id: string;
   username: string;
@@ -98,6 +119,9 @@ export interface UserAccount {
   namaLengkap: string;
   active: boolean;
   guruId?: string;
+  stafId?: string;
+  aksesSarpras?: boolean;
+  tugasTambahan?: string;
 }
 
 export interface Announcement {
@@ -336,6 +360,8 @@ export interface SchoolDatabaseState {
   periods: EducationPeriod[];
   activePeriodId: string;
   schoolProfile: SchoolProfile;
+  loginConfig: LoginConfig;
+  subjects: string[];
   accounts: UserAccount[];
   announcements: Announcement[];
   gurus: Guru[];

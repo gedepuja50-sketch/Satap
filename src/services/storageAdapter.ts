@@ -69,6 +69,15 @@ function migrateStateWithPeriods(
     };
   });
 
+  const existingNilaiIds = new Set(nilaiRecords.map((n) => n.id));
+  const shouldBackfillSeedNilai = (rawState.version ?? 0) < 6;
+  const mergedNilaiRecords = shouldBackfillSeedNilai
+    ? [
+        ...nilaiRecords,
+        ...fallbackSeed.nilaiRecords.filter((sn) => !existingNilaiIds.has(sn.id)),
+      ]
+    : nilaiRecords;
+
   const adminGuruEntries = (rawState.adminGuruEntries || fallbackSeed.adminGuruEntries).map((e) => {
     const matchedPeriod =
       periods.find((p) => p.tahunAjaran === e.tahunAjaran && p.semester === e.semester) ||
@@ -84,15 +93,35 @@ function migrateStateWithPeriods(
     };
   });
 
+  const existingAccounts =
+    Array.isArray(rawState.accounts) && rawState.accounts.length > 0
+      ? rawState.accounts
+      : fallbackSeed.accounts;
+
+  const hasStafAccount = existingAccounts.some((a) => a.role === 'STAF');
+  const mergedAccounts = hasStafAccount
+    ? existingAccounts
+    : [
+        ...existingAccounts,
+        ...fallbackSeed.accounts.filter(
+          (sa) =>
+            sa.role === 'STAF' &&
+            !existingAccounts.some(
+              (ea) => ea.username.toLowerCase() === sa.username.toLowerCase()
+            )
+        ),
+      ];
+
   return {
     ...fallbackSeed,
     ...rawState,
-    version: 3,
+    version: 6,
     periods,
     activePeriodId,
+    accounts: mergedAccounts,
     gurus,
     siswas,
-    nilaiRecords,
+    nilaiRecords: mergedNilaiRecords,
     studentRaporExtras: Array.isArray(rawState.studentRaporExtras)
       ? rawState.studentRaporExtras
       : fallbackSeed.studentRaporExtras,
@@ -100,6 +129,17 @@ function migrateStateWithPeriods(
     guruCertificates: Array.isArray(rawState.guruCertificates)
       ? rawState.guruCertificates
       : fallbackSeed.guruCertificates,
+    subjects:
+      Array.isArray(rawState.subjects) && rawState.subjects.length > 0
+        ? Array.from(new Set(rawState.subjects.filter((s) => typeof s === 'string' && s.trim() !== '')))
+        : fallbackSeed.subjects,
+    loginConfig: {
+      ...fallbackSeed.loginConfig,
+      ...(rawState.loginConfig || {}),
+      notes: Array.isArray(rawState.loginConfig?.notes)
+        ? rawState.loginConfig.notes
+        : fallbackSeed.loginConfig.notes,
+    },
     schoolProfile: {
       ...fallbackSeed.schoolProfile,
       ...(rawState.schoolProfile || {}),

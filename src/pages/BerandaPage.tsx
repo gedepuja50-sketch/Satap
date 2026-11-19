@@ -24,7 +24,6 @@ import {SCHOOL_BANNER_IMAGE} from '../data/seedData';
 import {getMediaFile} from '../services/mediaDb';
 import {
   Announcement,
-  DAFTAR_MAPEL,
   Guru,
   GuruCertificate,
   KelasLevel,
@@ -49,6 +48,7 @@ export const BerandaPage: React.FC<{onNavigate?: (menu: MenuKey) => void}> = ({o
   } = useSchool();
   const {
     schoolProfile,
+    subjects,
     buildings,
     assets,
     prestasis,
@@ -70,7 +70,7 @@ export const BerandaPage: React.FC<{onNavigate?: (menu: MenuKey) => void}> = ({o
 
   // Hitung rata-rata nilai per mata pelajaran pada periode terpilih
   const rataMapelChart = useMemo(() => {
-    return DAFTAR_MAPEL.map((mapel) => {
+    return subjects.map((mapel) => {
       const relevant = nilaiRecords.filter(
         (n) => n.periodId === selectedPeriod.id && n.mapel === mapel
       );
@@ -83,7 +83,7 @@ export const BerandaPage: React.FC<{onNavigate?: (menu: MenuKey) => void}> = ({o
           : 0;
       return {mapel, avg, count: averages.length};
     });
-  }, [nilaiRecords, selectedPeriod.id, gradeSettings]);
+  }, [subjects, nilaiRecords, selectedPeriod.id, gradeSettings]);
 
   // Pencarian cepat guru di Beranda
   const [guruSearch, setGuruSearch] = useState('');
@@ -302,6 +302,33 @@ export const BerandaPage: React.FC<{onNavigate?: (menu: MenuKey) => void}> = ({o
           </div>
         </div>
       </section>
+
+      {/* Pintasan Tugas Tambahan Sarana & Prasarana untuk Staf/Guru yang ditugaskan */}
+      {!isAdmin && currentUser?.aksesSarpras && onNavigate && (
+        <section className="rounded-2xl border border-teal-200 dark:border-teal-800/70 bg-teal-50/80 dark:bg-teal-950/30 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-start sm:items-center gap-3">
+            <div className="p-2.5 rounded-xl bg-teal-700 text-white shrink-0">
+              <Building2 className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="text-sm font-display font-bold text-teal-950 dark:text-teal-100">
+                Tugas Tambahan: {currentUser.tugasTambahan || 'Input Data Sarana & Prasarana Sekolah'}
+              </p>
+              <p className="text-xs text-teal-800 dark:text-teal-300 mt-0.5">
+                Akun Anda memiliki akses langsung untuk mengelola dan menginput data gedung serta aset sarana prasarana sekolah.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => onNavigate('sarana-prasarana')}
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-xs sm:text-sm font-semibold shrink-0 cursor-pointer self-start sm:self-auto"
+          >
+            <Building2 className="w-4 h-4" />
+            Buka Sarana &amp; Prasarana
+          </button>
+        </section>
+      )}
 
       {/* 2. Profil Sekolah & Informasi Terbaru (Admin dapat mengupdate langsung) */}
       <section className="grid grid-cols-1 lg:grid-cols-12 gap-6">

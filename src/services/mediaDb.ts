@@ -1,5 +1,10 @@
 // Layanan IndexedDB untuk menyimpan file dokumen, foto, dan video ukuran besar secara lokal
 
+import * as pdfjsLib from 'pdfjs-dist';
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+
 const DB_NAME = 'smpn_besakih_media_v1';
 const DB_VERSION = 1;
 const STORE_NAME = 'media_files';
@@ -137,4 +142,80 @@ export function compressImageToDataUrl(file: File, maxDimension = 640, quality =
     reader.onerror = () => reject(new Error('Gagal membaca berkas gambar.'));
     reader.readAsDataURL(file);
   });
+}
+
+// Crop & format pas foto siswa menjadi rasio tepat 3x4 (default 300x400 px)
+export function cropImageTo3x4DataUrl(
+  file: File,
+  targetWidth = 300,
+  targetHeight = 400,
+  quality = 0.88
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(String(e.target?.result || ''));
+          return;
+        }
+        // Latar putih untuk gambar PNG transparan
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, targetWidth, targetHeight);
+
+        const targetRatio = targetWidth / targetHeight; // 0.75 (3:4)
+        const srcRatio = img.width / img.height;
+        let sx = 0;
+        let sy = 0;
+        let sWidth = img.width;
+        let sHeight = img.height;
+
+        if (srcRatio > targetRatio) {
+          // Gambar lebih lebar dari 3:4 -> pangkas kiri/kanan secara simetris
+          sWidth = img.height * targetRatio;
+          sx = (img.width - sWidth) / 2;
+        } else if (srcRatio < targetRatio) {
+          // Gambar lebih tinggi dari 3:4 -> pangkas atas/bawah (sedikit bias atas untuk wajah)
+          sHeight = img.width / targetRatio;
+          sy = Math.max(0, (img.height - sHeight) * 0.25);
+        }
+
+        ctx.drawImage(img, sx, sy, sWidth, sHeight, 0, 0, targetWidth, targetHeight);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = () => reject(new Error('Berkas foto tidak valid.'));
+      img.src = String(e.target?.result || '');
+    };
+    reader.onerror = () => reject(new Error('Gagal membaca berkas foto.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+// Render halaman pertama file PDF menjadi DataURL gambar agar bisa dipratinjau & digabung ke 1 kertas PDF
+export async function renderPdfFirstPageToDataUrl(fileOrBlob: Blob, maxWidth = 960): Promise<string> {
+  const arrayBuffer = await fileOrBlob.arrayBuffer();
+  const loadingTask = pdfjsLib.getDocument({data: new Uint8Array(arrayBuffer)});
+  const pdf = await loadingTask.promise;
+  const page = await pdf.getPage(1);
+  const baseViewport = page.getViewport({scale: 1});
+  const scale = Math.min(2.2, Math.max(1.2, maxWidth / Math.max(1, baseViewport.width)));
+  const viewport = page.getViewport({scale});
+
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(viewport.width));
+  canvas.height = Math.max(1, Math.round(viewport.height));
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error('Gagal menyiapkan kanvas pratinjau PDF.');
+  }
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  await page.render({canvasContext: ctx, viewport, canvas}).promise;
+  return canvas.toDataURL('image/jpeg', 0.9);
 }

@@ -1,16 +1,19 @@
 // Kerangka navigasi utama (Sidebar + Header responsif dengan pemilih Periode Pendidikan & RBAC ketat)
 
-import React, {useRef, useState} from 'react';
+import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {
   Award,
+  Bell,
   Building2,
   CalendarRange,
+  CheckCheck,
   ClipboardList,
   FolderKanban,
   GraduationCap,
   Home,
   ImagePlus,
   LogOut,
+  Megaphone,
   Menu,
   Moon,
   Settings,
@@ -20,10 +23,25 @@ import {
   UserCircle2,
   UserCog,
   Users,
+  Wallet,
   X,
 } from 'lucide-react';
 import {useSchool} from '../context/SchoolContext';
 import {MenuKey, UserRole} from '../types/school';
+import {formatTanggalId} from '../utils/gradeUtils';
+import {Modal} from './ui/AvatarAndModal';
+
+interface HeaderNotification {
+  notifKey: string;
+  sourceType: 'PENGUMUMAN' | 'CATATAN';
+  judul: string;
+  ringkasan: string;
+  isi: string;
+  kategori: string;
+  tanggal: string;
+  penulis: string;
+  penting?: boolean;
+}
 
 interface NavItem {
   key: MenuKey;
@@ -41,7 +59,7 @@ const NAV_ITEMS: NavItem[] = [
   {key: 'guru', label: 'Guru', icon: Users, roles: ['ADMIN']},
   {key: 'kepala-sekolah', label: 'Kepala Sekolah', icon: UserCheck, roles: ['ADMIN']},
   {key: 'staf', label: 'Staf', icon: UserCog, roles: ['ADMIN', 'STAF']},
-  {key: 'siswa', label: 'Siswa', icon: GraduationCap, roles: ['ADMIN']},
+  {key: 'siswa', label: 'Siswa', icon: GraduationCap, roles: ['ADMIN', 'GURU']},
   {key: 'nilai-siswa', label: 'Nilai Siswa', icon: ClipboardList, roles: ['ADMIN', 'GURU']},
   {key: 'administrasi-guru', label: 'Administrasi Guru', icon: FolderKanban, roles: ['ADMIN', 'GURU']},
   {
@@ -51,6 +69,7 @@ const NAV_ITEMS: NavItem[] = [
     roles: ['ADMIN', 'STAF', 'GURU'],
     requiresSarprasAccess: true,
   },
+  {key: 'keuangan', label: 'Keuangan Sekolah', icon: Wallet, roles: ['ADMIN', 'GURU', 'STAF']},
   {key: 'prestasi', label: 'Prestasi', icon: Award, roles: ['ADMIN']},
   {key: 'panel-admin', label: 'Panel Admin', icon: Shield, roles: ['ADMIN']},
   {key: 'pengaturan', label: 'Pengaturan', icon: Settings, roles: ['ADMIN']},
@@ -72,10 +91,69 @@ export const Layout: React.FC<{
     theme,
     toggleTheme,
     updateLogoFromFile,
+    markNotificationRead,
+    markAllNotificationsRead,
   } = useSchool();
-  const {schoolProfile, periods} = state;
+  const {schoolProfile, periods, announcements, loginConfig, readNotificationsByUser} = state;
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [selectedNotif, setSelectedNotif] = useState<HeaderNotification | null>(null);
   const logoInputRef = useRef<HTMLInputElement | null>(null);
+  const notifContainerRef = useRef<HTMLDivElement | null>(null);
+
+  const notifications = useMemo<HeaderNotification[]>(() => {
+    const annList: HeaderNotification[] = announcements.map((a) => ({
+      notifKey: `ann:${a.id}:${a.tanggal}:${a.judul}`,
+      sourceType: 'PENGUMUMAN',
+      judul: a.judul,
+      ringkasan: a.ringkasan,
+      isi: a.isi,
+      kategori: a.kategori,
+      tanggal: a.tanggal,
+      penulis: a.penulis,
+      penting: a.penting,
+    }));
+    const noteList: HeaderNotification[] = (loginConfig.notes || []).map((n) => ({
+      notifKey: `note:${n.id}:${n.tanggal}:${n.judul}`,
+      sourceType: 'CATATAN',
+      judul: n.judul,
+      ringkasan: n.isi,
+      isi: n.isi,
+      kategori: `Catatan Admin · ${n.kategori}`,
+      tanggal: n.tanggal,
+      penulis: 'Administrator Sekolah',
+      penting: n.kategori === 'Penting',
+    }));
+    return [...annList, ...noteList].sort((a, b) => (b.tanggal || '').localeCompare(a.tanggal || ''));
+  }, [announcements, loginConfig.notes]);
+
+  const readSet = useMemo(() => {
+    const list = (currentUser && readNotificationsByUser?.[currentUser.id]) || [];
+    return new Set(list);
+  }, [currentUser, readNotificationsByUser]);
+
+  const unreadCount = useMemo(
+    () => notifications.filter((n) => !readSet.has(n.notifKey)).length,
+    [notifications, readSet]
+  );
+
+  useEffect(() => {
+    if (!notifOpen) return;
+    const handleOutside = (e: MouseEvent) => {
+      if (notifContainerRef.current && !notifContainerRef.current.contains(e.target as Node)) {
+        setNotifOpen(false);
+      }
+    };
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setNotifOpen(false);
+    };
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('keydown', handleEsc);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('keydown', handleEsc);
+    };
+  }, [notifOpen]);
 
   const isAdmin = currentUser?.role === 'ADMIN';
   const visibleMenus = NAV_ITEMS.filter((item) => {
@@ -145,7 +223,9 @@ export const Layout: React.FC<{
               }`}
             >
               <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-amber-300' : 'text-slate-400 dark:text-slate-500'}`} />
-              <span className="truncate">{item.label}</span>
+              <span className="truncate">
+                {currentUser?.role === 'STAF' && item.key === 'staf' ? 'Profil Staf Saya' : item.label}
+              </span>
             </button>
           );
         })}
@@ -161,9 +241,13 @@ export const Layout: React.FC<{
             {isAdmin
               ? 'Administrator Sekolah'
               : currentUser?.role === 'STAF'
-                ? currentUser.aksesSarpras
-                  ? 'Akun Staf · Input Sarpras'
-                  : 'Akun Staf'
+                ? [
+                    'Akun Staf',
+                    currentUser.aksesKeuangan ? 'Keuangan' : '',
+                    currentUser.aksesSarpras ? 'Sarpras' : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')
                 : currentUser?.aksesSarpras
                   ? 'Akun Guru · Input Sarpras'
                   : 'Akun Guru'}{' '}
@@ -272,6 +356,107 @@ export const Layout: React.FC<{
                 </>
               )}
 
+              {/* Lonceng Notifikasi Pengumuman & Catatan Admin */}
+              <div ref={notifContainerRef} className="relative">
+                <button
+                  type="button"
+                  onClick={() => setNotifOpen((prev) => !prev)}
+                  className="relative inline-flex items-center justify-center p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors shrink-0 cursor-pointer"
+                  aria-label="Notifikasi pengumuman dan catatan admin"
+                  title="Notifikasi Pengumuman & Catatan Admin"
+                >
+                  <Bell className={`w-4 h-4 ${unreadCount > 0 ? 'text-amber-500' : ''}`} />
+                  {unreadCount > 0 && (
+                    <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-bold font-mono-num flex items-center justify-center shadow-sm">
+                      {unreadCount > 9 ? '9+' : unreadCount}
+                    </span>
+                  )}
+                </button>
+
+                {notifOpen && (
+                  <div className="absolute right-0 mt-2 w-80 sm:w-96 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xl z-50 overflow-hidden">
+                    <div className="px-4 py-3 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2 bg-slate-50/70 dark:bg-slate-950/60">
+                      <div>
+                        <p className="text-xs font-display font-bold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
+                          <Megaphone className="w-3.5 h-3.5 text-amber-500" />
+                          Pengumuman &amp; Catatan Admin
+                        </p>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                          {unreadCount > 0
+                            ? `${unreadCount} informasi belum dibaca`
+                            : 'Semua informasi telah dibaca'}
+                        </p>
+                      </div>
+                      {unreadCount > 0 && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            markAllNotificationsRead(notifications.map((n) => n.notifKey))
+                          }
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-teal-700 dark:text-teal-400 hover:bg-teal-50 dark:hover:bg-teal-950/50 cursor-pointer"
+                        >
+                          <CheckCheck className="w-3.5 h-3.5" />
+                          Tandai Dibaca
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="max-h-80 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
+                      {notifications.length === 0 ? (
+                        <div className="p-6 text-center text-xs text-slate-500">
+                          Belum ada pengumuman atau catatan dari Admin.
+                        </div>
+                      ) : (
+                        notifications.map((item) => {
+                          const isUnread = !readSet.has(item.notifKey);
+                          return (
+                            <button
+                              key={item.notifKey}
+                              type="button"
+                              onClick={() => {
+                                markNotificationRead(item.notifKey);
+                                setSelectedNotif(item);
+                                setNotifOpen(false);
+                              }}
+                              className={`w-full text-left px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors cursor-pointer ${
+                                isUnread ? 'bg-teal-50/50 dark:bg-teal-950/20' : ''
+                              }`}
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <span className="text-[10px] font-semibold text-teal-700 dark:text-teal-400">
+                                  {item.kategori}
+                                  {item.penting && (
+                                    <span className="ml-1.5 text-amber-600 dark:text-amber-400">
+                                      · Prioritas
+                                    </span>
+                                  )}
+                                </span>
+                                <span className="text-[10px] font-mono-num text-slate-400 shrink-0">
+                                  {formatTanggalId(item.tanggal)}
+                                </span>
+                              </div>
+                              <div className="flex items-start gap-2 mt-1">
+                                {isUnread && (
+                                  <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0 mt-1.5" />
+                                )}
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-xs font-semibold text-slate-900 dark:text-slate-100 line-clamp-1">
+                                    {item.judul}
+                                  </p>
+                                  <p className="text-[11px] text-slate-600 dark:text-slate-400 line-clamp-2 mt-0.5">
+                                    {item.ringkasan}
+                                  </p>
+                                </div>
+                              </div>
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
               <button
                 type="button"
                 onClick={toggleTheme}
@@ -314,6 +499,46 @@ export const Layout: React.FC<{
         {/* Isi Halaman Aktif */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-[1400px] w-full mx-auto">{children}</main>
       </div>
+
+      {/* Modal Detail Pengumuman / Catatan Admin saat item notifikasi ditekan */}
+      <Modal
+        open={Boolean(selectedNotif)}
+        onClose={() => setSelectedNotif(null)}
+        title={selectedNotif?.judul || ''}
+        subtitle={
+          selectedNotif
+            ? `${selectedNotif.kategori} · ${formatTanggalId(selectedNotif.tanggal)} · Oleh ${selectedNotif.penulis}`
+            : ''
+        }
+        maxWidthClass="max-w-lg"
+      >
+        {selectedNotif && (
+          <div className="space-y-4">
+            <div className="rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-4 text-sm text-slate-700 dark:text-slate-200 leading-relaxed whitespace-pre-line">
+              {selectedNotif.isi || selectedNotif.ringkasan}
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedNotif(null);
+                  onSelectMenu('beranda');
+                }}
+                className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                Buka di Beranda
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedNotif(null)}
+                className="px-4 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-xs font-semibold cursor-pointer"
+              >
+                Tutup
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 };

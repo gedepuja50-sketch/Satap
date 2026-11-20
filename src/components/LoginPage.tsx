@@ -231,8 +231,8 @@ export const LoginPage: React.FC = () => {
                     ? 'Akses Penuh · Panel Admin & Pusat Arsip'
                     : acc.role === 'STAF'
                       ? `${stafData?.jabatan || 'Tenaga Kependidikan'}${
-                          acc.aksesSarpras ? ' · Input Sarpras' : ''
-                        }`
+                          acc.aksesKeuangan ? ' · Input Keuangan' : ''
+                        }${acc.aksesSarpras ? ' · Input Sarpras' : ''}`
                       : guruData
                         ? `Mapel: ${guruData.mapelDiampu.join(', ')}`
                         : 'Akun Guru';

@@ -19,6 +19,7 @@ import {SiswaPage} from './pages/SiswaPage';
 import {NilaiSiswaPage} from './pages/NilaiSiswaPage';
 import {AdministrasiGuruPage} from './pages/AdministrasiGuruPage';
 import {SaranaPrasaranaPage} from './pages/SaranaPrasaranaPage';
+import {KeuanganPage} from './pages/KeuanganPage';
 import {PrestasiPage} from './pages/PrestasiPage';
 import {PanelAdminPage} from './pages/PanelAdminPage';
 import {PengaturanPage} from './pages/PengaturanPage';
@@ -35,18 +36,26 @@ function getAllowedMenus(user: UserAccount): MenuKey[] {
       'nilai-siswa',
       'administrasi-guru',
       'sarana-prasarana',
+      'keuangan',
       'prestasi',
       'panel-admin',
       'pengaturan',
     ];
   }
   if (user.role === 'GURU') {
-    const menus: MenuKey[] = ['beranda', 'profil-saya', 'nilai-siswa', 'administrasi-guru'];
+    const menus: MenuKey[] = [
+      'beranda',
+      'profil-saya',
+      'siswa',
+      'nilai-siswa',
+      'administrasi-guru',
+      'keuangan',
+    ];
     if (user.aksesSarpras) menus.push('sarana-prasarana');
     return menus;
   }
   // Peran STAF
-  const stafMenus: MenuKey[] = ['beranda', 'staf'];
+  const stafMenus: MenuKey[] = ['beranda', 'staf', 'keuangan'];
   if (user.aksesSarpras) stafMenus.push('sarana-prasarana');
   return stafMenus;
 }
@@ -56,7 +65,7 @@ const AppRouter: React.FC = () => {
   const [activeMenu, setActiveMenu] = useState<MenuKey>('beranda');
   const lastUserIdRef = useRef<string | null>(null);
 
-  // Saat pengguna baru masuk: jika mendapat tugas input Sarana & Prasarana, langsung arahkan ke menu Sarana & Prasarana
+  // Saat pengguna baru masuk: arahkan Staf/Guru sesuai tugas khusus (Keuangan / Sarpras)
   useEffect(() => {
     if (!currentUser) {
       lastUserIdRef.current = null;
@@ -65,6 +74,10 @@ const AppRouter: React.FC = () => {
     const allowed = getAllowedMenus(currentUser);
     if (lastUserIdRef.current !== currentUser.id) {
       lastUserIdRef.current = currentUser.id;
+      if (currentUser.role === 'STAF' && currentUser.aksesKeuangan && !currentUser.aksesSarpras) {
+        setActiveMenu('keuangan');
+        return;
+      }
       if (currentUser.role !== 'ADMIN' && currentUser.aksesSarpras) {
         setActiveMenu('sarana-prasarana');
         return;
@@ -108,6 +121,8 @@ const AppRouter: React.FC = () => {
         return <AdministrasiGuruPage />;
       case 'sarana-prasarana':
         return <SaranaPrasaranaPage />;
+      case 'keuangan':
+        return <KeuanganPage />;
       case 'prestasi':
         return <PrestasiPage />;
       case 'panel-admin':

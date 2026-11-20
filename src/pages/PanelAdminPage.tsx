@@ -25,6 +25,7 @@ import {
   UserCheck,
   Users,
   UserX,
+  Wallet,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import {useSchool} from '../context/SchoolContext';
@@ -86,6 +87,7 @@ export const PanelAdminPage: React.FC = () => {
     updateSubjectTeachers,
     saveAccount,
     toggleSarprasAccess,
+    toggleKeuanganAccess,
     deleteAccount,
     restoreFromBackup,
     resetAllToSeed,
@@ -523,6 +525,7 @@ export const PanelAdminPage: React.FC = () => {
     guruId: '',
     stafId: '',
     aksesSarpras: false,
+    aksesKeuangan: false,
     tugasTambahan: '',
   });
 
@@ -538,6 +541,7 @@ export const PanelAdminPage: React.FC = () => {
       guruId: state.gurus[0]?.id || '',
       stafId: state.stafs[0]?.id || '',
       aksesSarpras: false,
+      aksesKeuangan: false,
       tugasTambahan: '',
     });
     setAccModalOpen(true);
@@ -549,6 +553,7 @@ export const PanelAdminPage: React.FC = () => {
       ...acc,
       stafId: acc.stafId || '',
       aksesSarpras: Boolean(acc.aksesSarpras),
+      aksesKeuangan: Boolean(acc.aksesKeuangan),
       tugasTambahan: acc.tugasTambahan || '',
     });
     setAccModalOpen(true);
@@ -568,6 +573,7 @@ export const PanelAdminPage: React.FC = () => {
       return;
     }
     const hasSarpras = accForm.role === 'ADMIN' ? true : Boolean(accForm.aksesSarpras);
+    const hasKeuangan = accForm.role === 'STAF' ? Boolean(accForm.aksesKeuangan) : false;
     saveAccount(
       {
         ...accForm,
@@ -575,9 +581,14 @@ export const PanelAdminPage: React.FC = () => {
         guruId: accForm.role === 'GURU' ? accForm.guruId : undefined,
         stafId: accForm.role === 'STAF' ? accForm.stafId : undefined,
         aksesSarpras: hasSarpras,
+        aksesKeuangan: hasKeuangan,
         tugasTambahan:
           accForm.tugasTambahan?.trim() ||
-          (accForm.role !== 'ADMIN' && hasSarpras ? 'Input Data Sarana & Prasarana Sekolah' : undefined),
+          (hasKeuangan
+            ? 'Pengelola & Input Keuangan Sekolah'
+            : accForm.role !== 'ADMIN' && hasSarpras
+              ? 'Input Data Sarana & Prasarana Sekolah'
+              : undefined),
       },
       isNewAcc
     );
@@ -1598,7 +1609,7 @@ export const PanelAdminPage: React.FC = () => {
                     <th className="py-3 px-4">Username</th>
                     <th className="py-3 px-4">Nama Lengkap</th>
                     <th className="py-3 px-4">Peran</th>
-                    <th className="py-3 px-4">Tugas Khusus (Sarpras)</th>
+                    <th className="py-3 px-4">Tugas Khusus (Sarpras / Keuangan)</th>
                     <th className="py-3 px-4">Status</th>
                     <th className="py-3 px-4 text-right">Aksi</th>
                   </tr>
@@ -1633,12 +1644,24 @@ export const PanelAdminPage: React.FC = () => {
                         </td>
                         <td className="py-3 px-4 text-xs">
                           {acc.role === 'ADMIN' ? (
-                            <span className="text-slate-500 dark:text-slate-400 font-medium">Akses Penuh</span>
-                          ) : acc.aksesSarpras ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-semibold">
-                              <Building2 className="w-3 h-3" />
-                              Input Sarpras
+                            <span className="text-slate-500 dark:text-slate-400 font-medium">
+                              Akses Penuh (Keuangan: Terima Hasil)
                             </span>
+                          ) : acc.aksesSarpras || acc.aksesKeuangan ? (
+                            <div className="flex flex-wrap gap-1">
+                              {acc.aksesSarpras && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-semibold">
+                                  <Building2 className="w-3 h-3" />
+                                  Input Sarpras
+                                </span>
+                              )}
+                              {acc.aksesKeuangan && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 font-semibold">
+                                  <Wallet className="w-3 h-3" />
+                                  Input Keuangan
+                                </span>
+                              )}
+                            </div>
                           ) : (
                             <span className="text-slate-400">-</span>
                           )}
@@ -1651,6 +1674,24 @@ export const PanelAdminPage: React.FC = () => {
                           )}
                         </td>
                         <td className="py-3 px-4 text-right whitespace-nowrap space-x-1">
+                          {acc.role === 'STAF' && (
+                            <button
+                              type="button"
+                              onClick={() => toggleKeuanganAccess(acc.id)}
+                              className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                                acc.aksesKeuangan
+                                  ? 'text-amber-700 bg-amber-50 hover:bg-amber-100 dark:text-amber-300 dark:bg-amber-950/40'
+                                  : 'text-slate-500 hover:text-amber-600 hover:bg-slate-100 dark:hover:bg-slate-800'
+                              }`}
+                              title={
+                                acc.aksesKeuangan
+                                  ? 'Cabut tugas input Keuangan Sekolah'
+                                  : 'Tugaskan input Keuangan Sekolah'
+                              }
+                            >
+                              <Wallet className="w-4 h-4" />
+                            </button>
+                          )}
                           {acc.role !== 'ADMIN' && (
                             <button
                               type="button"
@@ -2046,7 +2087,32 @@ export const PanelAdminPage: React.FC = () => {
                   </span>
                 </span>
               </label>
-              {accForm.aksesSarpras && (
+              {accForm.role === 'STAF' && (
+                <label className="flex items-start gap-2.5 text-xs font-semibold text-amber-900 dark:text-amber-200 cursor-pointer pt-1 border-t border-teal-200/70 dark:border-teal-800/50">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(accForm.aksesKeuangan)}
+                    onChange={(e) =>
+                      setAccForm({
+                        ...accForm,
+                        aksesKeuangan: e.target.checked,
+                        tugasTambahan:
+                          e.target.checked && !accForm.tugasTambahan
+                            ? 'Pengelola & Input Keuangan Sekolah'
+                            : accForm.tugasTambahan,
+                      })
+                    }
+                    className="mt-0.5 rounded border-slate-300 text-teal-700"
+                  />
+                  <span>
+                    Tugas Khusus: Pengelola &amp; Input Keuangan Sekolah
+                    <span className="block font-normal text-[11px] text-slate-600 dark:text-slate-400 mt-0.5">
+                      Staf ini diberi hak akses menginput pemasukan, penarikan, kertas kerja, serta impor Excel Keuangan Sekolah.
+                    </span>
+                  </span>
+                </label>
+              )}
+              {(accForm.aksesSarpras || accForm.aksesKeuangan) && (
                 <div>
                   <label className="block text-[11px] font-semibold mb-1 text-slate-700 dark:text-slate-300">
                     Keterangan Tugas Tambahan
@@ -2055,7 +2121,7 @@ export const PanelAdminPage: React.FC = () => {
                     type="text"
                     value={accForm.tugasTambahan || ''}
                     onChange={(e) => setAccForm({...accForm, tugasTambahan: e.target.value})}
-                    placeholder="Contoh: Input Data Sarana & Prasarana Sekolah"
+                    placeholder="Contoh: Operator BOS, Keuangan & Sarpras"
                     className="w-full px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
                   />
                 </div>

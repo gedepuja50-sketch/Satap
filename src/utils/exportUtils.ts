@@ -5,12 +5,14 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import JSZip from 'jszip';
 import * as XLSX from 'xlsx';
-import {getMediaFile} from '../services/mediaDb';
+import {fileToDataUrl, getMediaFile, renderPdfFirstPageToDataUrl} from '../services/mediaDb';
 import {
   AdminGuruEntry,
   Building,
   DAFTAR_MAPEL,
   EducationPeriod,
+  FinancePeriod,
+  FinanceWorksheet,
   GradeSettings,
   Guru,
   GuruCertificate,
@@ -25,6 +27,11 @@ import {
   Siswa,
   StudentRaporExtras,
 } from '../types/school';
+import {
+  computeFinancePeriodTotals,
+  computeWorksheetSummary,
+  formatRupiah,
+} from './financeUtils';
 import {
   evaluateStudentPromotionStatus,
   formatTanggalId,
@@ -1407,3 +1414,522 @@ export async function exportAllGurusPdf(
   const safePeriod = periodLabel.replace(/[^a-zA-Z0-9._-]/g, '_');
   doc.save(`Profil_Lengkap_Semua_Guru_${safePeriod}.pdf`);
 }
+
+// Ekspor PDF Hasil Akhir Kertas Kerja Keuangan Sekolah
+export async function exportFinanceWorksheetPdf(
+  ws: FinanceWorksheet,
+  period: FinancePeriod,
+  school: SchoolProfile,
+  kepalaSekolah?: KepalaSekolah,
+  penginputNama?: string
+) {
+  const doc = new jsPDF({orientation: 'portrait', unit: 'mm', format: 'a4'});
+  const summary = computeWorksheetSummary(ws, period.tahun);
+
+  const startY = await drawSchoolHeaderPdf(
+    doc,
+    school,
+    'LAPORAN KEUANGAN SEKOLAH (KERTAS KERJA)',
+    `${ws.nama} · Sumber Dana: ${ws.sumberDana} · ${period.label}`
+  );
+
+  autoTable(doc, {
+    startY,
+    head: [['Saldo Awal', 'Total Pemasukan', 'Total Penarikan', 'Saldo Akhir Otomatis', 'Status']],
+    body: [
+      [
+        formatRupiah(summary.saldoAwal),
+        formatRupiah(summary.totalPemasukan),
+        formatRupiah(summary.totalPenarikan),
+        formatRupiah(summary.saldoAkhir),
+        summary.statusLabel,
+      ],
+    ],
+    styles: {fontSize: 8.5, cellPadding: 2.5, halign: 'center', fontStyle: 'bold'},
+    headStyles: {fillColor: [15, 118, 110], textColor: 255},
+    columnStyles: {
+      1: {textColor: [5, 150, 105]},
+      2: {textColor: [220, 38, 38]},
+      3: {textColor: summary.saldoAkhir < 0 ? [220, 38, 38] : [15, 118, 110]},
+    },
+  });
+
+  const nextY =
+    ((doc as unknown as {lastAutoTable?: {finalY: number}}).lastAutoTable?.finalY || startY + 20) + 4;
+
+  autoTable(doc, {
+    startY: nextY,
+    head: [['No', 'Tanggal', 'Kode', 'Kategori', 'Uraian Transaksi', 'Pemasukan', 'Penarikan', 'Saldo Berjalan']],
+    body: [
+      [
+        '-',
+        '-',
+        '-',
+        'Saldo Awal',
+        `Saldo Awal (${ws.nama})`,
+        '-',
+        '-',
+        formatRupiah(summary.saldoAwal),
+      ],
+      ...summary.rows.map((r) => [
+        r.rowIndex,
+        r.tanggal,
+        r.kodeBukti || '-',
+        r.kategori,
+        r.uraian + (r.keterangan ? `\n(${r.keterangan})` : ''),
+        r.pemasukan > 0 ? formatRupiah(r.pemasukan) : '-',
+        r.penarikan > 0 ? formatRupiah(r.penarikan) : '-',
+        formatRupiah(r.runningSaldo),
+      ]),
+      [
+        '',
+        '',
+        '',
+        '',
+        'TOTAL / HASIL AKHIR KERTAS KERJA',
+        formatRupiah(summary.totalPemasukan),
+        formatRupiah(summary.totalPenarikan),
+        formatRupiah(summary.saldoAkhir),
+      ],
+    ],
+    styles: {fontSize: 7.5, cellPadding: 1.8},
+    headStyles: {fillColor: [30, 41, 59], textColor: 255, fontStyle: 'bold'},
+    alternateRowStyles: {fillColor: [248, 250, 252]},
+    columnStyles: {
+      0: {halign: 'center', cellWidth: 8},
+      1: {cellWidth: 20},
+      2: {cellWidth: 16},
+      3: {cellWidth: 26},
+      5: {halign: 'right', cellWidth: 24},
+      6: {halign: 'right', cellWidth: 24},
+      7: {halign: 'right', cellWidth: 26, fontStyle: 'bold'},
+    },
+  });
+
+  let afterTableY =
+    ((doc as unknown as {lastAutoTable?: {finalY: number}}).lastAutoTable?.finalY || nextY + 40) + 5;
+  const pageHeight = doc.internal.pageSize.getHeight();
+
+  if (summary.warnings.length > 0) {
+    if (afterTableY > pageHeight - 45) {
+      doc.addPage();
+      afterTableY = 18;
+    }
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.setTextColor(180, 83, 9);
+    doc.text('Catatan & Peringatan Validasi Sistem:', 14, afterTableY);
+    autoTable(doc, {
+      startY: afterTableY + 2,
+      head: [['Tingkat', 'Keterangan Peringatan']],
+      body: summary.warnings.map((w) => [
+        w.severity === 'error' ? 'PERINGATAN KERAS' : 'Peringatan',
+        w.message,
+      ]),
+      styles: {fontSize: 7.5, cellPadding: 1.8},
+      headStyles: {fillColor: [217, 119, 6], textColor: 255, fontStyle: 'bold'},
+      columnStyles: {0: {cellWidth: 32, fontStyle: 'bold'}},
+    });
+    afterTableY =
+      ((doc as unknown as {lastAutoTable?: {finalY: number}}).lastAutoTable?.finalY || afterTableY + 20) + 6;
+  }
+
+  if (afterTableY > pageHeight - 36) {
+    doc.addPage();
+    afterTableY = 18;
+  }
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.2);
+  doc.setTextColor(30, 41, 59);
+  doc.text('Mengetahui,', 14, afterTableY);
+  doc.text(`Kepala ${school.nama}`, 14, afterTableY + 4);
+  doc.setFont('helvetica', 'bold');
+  doc.text(kepalaSekolah?.nama || 'Kepala Sekolah', 14, afterTableY + 19);
+  if (kepalaSekolah?.nip) {
+    doc.setFont('helvetica', 'normal');
+    doc.text(`NIP. ${kepalaSekolah.nip}`, 14, afterTableY + 23);
+  }
+
+  doc.setFont('helvetica', 'normal');
+  doc.text(`Besakih, ${formatTanggalId(new Date().toISOString())}`, 128, afterTableY);
+  doc.text('Staf Pengelola Keuangan Sekolah', 128, afterTableY + 4);
+  doc.setFont('helvetica', 'bold');
+  doc.text(penginputNama || ws.updatedBy || ws.createdByName || 'Bendahara / Staf Keuangan', 128, afterTableY + 19);
+
+  const safeWs = ws.nama.replace(/[^a-zA-Z0-9_-]+/g, '_');
+  doc.save(`Keuangan_${safeWs}_${period.tahun.replace(/[^0-9]/g, '')}.pdf`);
+}
+
+// Ekspor PDF Rekapitulasi Keuangan 1 Tahun (Semua Kertas Kerja)
+export async function exportFinancePeriodRecapPdf(
+  period: FinancePeriod,
+  worksheets: FinanceWorksheet[],
+  school: SchoolProfile,
+  kepalaSekolah?: KepalaSekolah
+) {
+  const doc = new jsPDF({orientation: 'portrait', unit: 'mm', format: 'a4'});
+  const recap = computeFinancePeriodTotals(period, worksheets);
+
+  const startY = await drawSchoolHeaderPdf(
+    doc,
+    school,
+    'REKAPITULASI HASIL AKHIR KEUANGAN SEKOLAH',
+    `Periode: ${period.label} (${recap.periodSheets.length} Kertas Kerja · ${recap.totalTransaksi} Transaksi)`
+  );
+
+  autoTable(doc, {
+    startY,
+    head: [['Total Saldo Awal', 'Total Pemasukan 1 Tahun', 'Total Penarikan 1 Tahun', 'Total Saldo Akhir']],
+    body: [
+      [
+        formatRupiah(recap.totalSaldoAwal),
+        formatRupiah(recap.totalPemasukan),
+        formatRupiah(recap.totalPenarikan),
+        formatRupiah(recap.totalSaldoAkhir),
+      ],
+    ],
+    styles: {fontSize: 9, cellPadding: 2.5, halign: 'center', fontStyle: 'bold'},
+    headStyles: {fillColor: [15, 118, 110], textColor: 255},
+    columnStyles: {
+      1: {textColor: [5, 150, 105]},
+      2: {textColor: [220, 38, 38]},
+      3: {textColor: recap.totalSaldoAkhir < 0 ? [220, 38, 38] : [15, 118, 110]},
+    },
+  });
+
+  let nextY =
+    ((doc as unknown as {lastAutoTable?: {finalY: number}}).lastAutoTable?.finalY || startY + 20) + 5;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.setTextColor(15, 118, 110);
+  doc.text('Ringkasan Per Kertas Kerja', 14, nextY);
+
+  autoTable(doc, {
+    startY: nextY + 2,
+    head: [['No', 'Nama Kertas Kerja', 'Sumber Dana', 'Saldo Awal', 'Pemasukan', 'Penarikan', 'Saldo Akhir', 'Status']],
+    body: recap.summaries.map(({ws, summary}, idx) => [
+      idx + 1,
+      ws.nama,
+      ws.sumberDana,
+      formatRupiah(summary.saldoAwal),
+      formatRupiah(summary.totalPemasukan),
+      formatRupiah(summary.totalPenarikan),
+      formatRupiah(summary.saldoAkhir),
+      summary.statusLabel,
+    ]),
+    styles: {fontSize: 7.5, cellPadding: 1.8},
+    headStyles: {fillColor: [30, 41, 59], textColor: 255, fontStyle: 'bold'},
+    alternateRowStyles: {fillColor: [248, 250, 252]},
+    columnStyles: {
+      0: {halign: 'center', cellWidth: 8},
+      3: {halign: 'right'},
+      4: {halign: 'right'},
+      5: {halign: 'right'},
+      6: {halign: 'right', fontStyle: 'bold'},
+    },
+  });
+
+  // Halaman rincian tiap kertas kerja
+  for (let i = 0; i < recap.summaries.length; i++) {
+    const {ws, summary} = recap.summaries[i];
+    doc.addPage();
+    const wsY = await drawSchoolHeaderPdf(
+      doc,
+      school,
+      `RINCIAN KERTAS KERJA: ${ws.nama.toUpperCase()}`,
+      `${period.label} · Sumber Dana: ${ws.sumberDana} · Saldo Akhir: ${formatRupiah(summary.saldoAkhir)}`
+    );
+    autoTable(doc, {
+      startY: wsY,
+      head: [['No', 'Tanggal', 'Kode', 'Kategori', 'Uraian Transaksi', 'Pemasukan', 'Penarikan', 'Saldo Berjalan']],
+      body: [
+        ['-', '-', '-', 'Saldo Awal', `Saldo Awal (${ws.nama})`, '-', '-', formatRupiah(summary.saldoAwal)],
+        ...summary.rows.map((r) => [
+          r.rowIndex,
+          r.tanggal,
+          r.kodeBukti || '-',
+          r.kategori,
+          r.uraian,
+          r.pemasukan > 0 ? formatRupiah(r.pemasukan) : '-',
+          r.penarikan > 0 ? formatRupiah(r.penarikan) : '-',
+          formatRupiah(r.runningSaldo),
+        ]),
+        [
+          '',
+          '',
+          '',
+          '',
+          'TOTAL / SALDO AKHIR',
+          formatRupiah(summary.totalPemasukan),
+          formatRupiah(summary.totalPenarikan),
+          formatRupiah(summary.saldoAkhir),
+        ],
+      ],
+      styles: {fontSize: 7.5, cellPadding: 1.8},
+      headStyles: {fillColor: [15, 118, 110], textColor: 255, fontStyle: 'bold'},
+      alternateRowStyles: {fillColor: [248, 250, 252]},
+      columnStyles: {
+        0: {halign: 'center', cellWidth: 8},
+        1: {cellWidth: 20},
+        2: {cellWidth: 16},
+        5: {halign: 'right'},
+        6: {halign: 'right'},
+        7: {halign: 'right', fontStyle: 'bold'},
+      },
+    });
+  }
+
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const sigY =
+    ((doc as unknown as {lastAutoTable?: {finalY: number}}).lastAutoTable?.finalY || 120) + 10;
+  if (sigY <= pageHeight - 28) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.2);
+    doc.setTextColor(30, 41, 59);
+    doc.text(`Besakih, ${formatTanggalId(new Date().toISOString())}`, 132, sigY);
+    doc.text(`Kepala ${school.nama}`, 132, sigY + 4);
+    doc.setFont('helvetica', 'bold');
+    doc.text(kepalaSekolah?.nama || 'Kepala Sekolah', 132, sigY + 18);
+    if (kepalaSekolah?.nip) {
+      doc.setFont('helvetica', 'normal');
+      doc.text(`NIP. ${kepalaSekolah.nip}`, 132, sigY + 22);
+    }
+  }
+
+  doc.save(`Rekap_Keuangan_Sekolah_${period.tahun.replace(/[^0-9]/g, '')}.pdf`);
+}
+
+// 9. EKSPOR IDENTITAS LENGKAP SISWA DALAM 1 KERTAS (PROFIL + FOTO 3x4 + KARTU PELAJAR)
+interface ImageMetrics {
+  dataUrl: string;
+  format: 'JPEG' | 'PNG';
+  width: number;
+  height: number;
+}
+
+async function loadImageMetrics(src: string, maxDimension = 1400): Promise<ImageMetrics | null> {
+  if (!src) return null;
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        const scale = Math.min(1, maxDimension / Math.max(1, img.width, img.height));
+        const width = Math.max(1, Math.round(img.width * scale));
+        const height = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(null);
+          return;
+        }
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, width, height);
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve({
+          dataUrl: canvas.toDataURL('image/jpeg', 0.92),
+          format: 'JPEG',
+          width,
+          height,
+        });
+      } catch {
+        resolve(null);
+      }
+    };
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
+}
+
+async function resolveKartuPelajarMetrics(siswa: Siswa): Promise<ImageMetrics | null> {
+  if (siswa.kartuPelajarPreviewUrl) {
+    const metrics = await loadImageMetrics(siswa.kartuPelajarPreviewUrl);
+    if (metrics) return metrics;
+  }
+  if (siswa.kartuPelajarFileId) {
+    try {
+      const stored = await getMediaFile(siswa.kartuPelajarFileId);
+      if (!stored) return null;
+      const isPdf =
+        stored.mimeType === 'application/pdf' ||
+        stored.name.toLowerCase().endsWith('.pdf') ||
+        (siswa.kartuPelajarFileName || '').toLowerCase().endsWith('.pdf');
+      if (isPdf) {
+        const rendered = await renderPdfFirstPageToDataUrl(stored.blob);
+        return await loadImageMetrics(rendered);
+      }
+      const dataUrl = await fileToDataUrl(stored.blob);
+      return await loadImageMetrics(dataUrl);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+async function renderStudentIdentitySingleSheet(
+  doc: jsPDF,
+  siswa: Siswa,
+  periodLabel: string,
+  school: SchoolProfile,
+  kepalaSekolah?: KepalaSekolah
+) {
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const startY = await drawSchoolHeaderPdf(
+    doc,
+    school,
+    'IDENTITAS LENGKAP PESERTA DIDIK',
+    `Periode: ${periodLabel} · Kelas ${siswa.kelas}`
+  );
+
+  // Pas Foto 3x4 di sisi kanan (ukuran cetak 30mm x 40mm = rasio tepat 3:4)
+  const photoW = 30;
+  const photoH = 40;
+  const photoX = pageWidth - 14 - photoW;
+  const photoY = startY + 1;
+
+  doc.setDrawColor(148, 163, 184);
+  doc.setFillColor(248, 250, 252);
+  doc.rect(photoX, photoY, photoW, photoH, 'FD');
+
+  if (siswa.foto3x4) {
+    const fotoMetrics = await loadImageMetrics(siswa.foto3x4, 800);
+    if (fotoMetrics) {
+      doc.addImage(fotoMetrics.dataUrl, fotoMetrics.format, photoX + 0.5, photoY + 0.5, photoW - 1, photoH - 1);
+    }
+  } else {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(100, 116, 139);
+    doc.text('Pas Foto', photoX + photoW / 2, photoY + 17, {align: 'center'});
+    doc.text('3 x 4', photoX + photoW / 2, photoY + 22, {align: 'center'});
+  }
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(71, 85, 105);
+  doc.text('Pas Foto 3 x 4', photoX + photoW / 2, photoY + photoH + 4, {align: 'center'});
+
+  // Tabel Profil Siswa di sebelah kiri foto 3x4 (tetap 1 halaman)
+  autoTable(doc, {
+    startY: startY + 1,
+    margin: {left: 14, right: photoW + 20},
+    tableWidth: pageWidth - 14 - (photoW + 20),
+    head: [['Atribut Identitas Siswa', 'Keterangan']],
+    body: [
+      ['NIS / NISN', `${siswa.nis} / ${siswa.nisn}`],
+      ['Nama Lengkap', siswa.nama],
+      ['Kelas', `Kelas ${siswa.kelas}`],
+      ['Jenis Kelamin', siswa.jenisKelamin === 'L' ? 'Laki-laki (L)' : 'Perempuan (P)'],
+      ['Tempat, Tgl Lahir', `${siswa.tempatLahir || '-'}, ${formatTanggalId(siswa.tanggalLahir)}`],
+      ['Alamat', siswa.alamat || '-'],
+      ['Orang Tua / Wali', siswa.namaOrtu || '-'],
+      ['No. HP Orang Tua', siswa.noHpOrtu || '-'],
+    ],
+    styles: {fontSize: 8.2, cellPadding: 1.9, overflow: 'linebreak'},
+    headStyles: {fillColor: [15, 118, 110], textColor: 255, fontStyle: 'bold'},
+    alternateRowStyles: {fillColor: [248, 250, 252]},
+    columnStyles: {
+      0: {fontStyle: 'bold', cellWidth: 42, textColor: [30, 41, 59]},
+      1: {cellWidth: 'auto'},
+    },
+  });
+
+  const profileBottomY =
+    (doc as unknown as {lastAutoTable?: {finalY: number}}).lastAutoTable?.finalY || startY + 66;
+  const sectionY = Math.max(profileBottomY, photoY + photoH + 7) + 6;
+
+  // Bagian Kartu Pelajar pada lembar A4 yang sama
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.setTextColor(15, 118, 110);
+  doc.text('KARTU PELAJAR PESERTA DIDIK', 14, sectionY);
+
+  const boxX = 14;
+  const boxY = sectionY + 2.5;
+  const boxW = pageWidth - 28;
+  const footerReserve = 28;
+  const boxH = Math.max(46, pageHeight - footerReserve - boxY);
+
+  doc.setDrawColor(203, 213, 225);
+  doc.setFillColor(248, 250, 252);
+  doc.roundedRect(boxX, boxY, boxW, boxH, 2.5, 2.5, 'FD');
+
+  const kartuMetrics = await resolveKartuPelajarMetrics(siswa);
+  if (kartuMetrics) {
+    const innerPad = 4;
+    const availW = boxW - innerPad * 2;
+    const availH = boxH - innerPad * 2 - 5;
+    const scale = Math.min(availW / kartuMetrics.width, availH / kartuMetrics.height);
+    const drawW = kartuMetrics.width * scale;
+    const drawH = kartuMetrics.height * scale;
+    const drawX = boxX + (boxW - drawW) / 2;
+    const drawY = boxY + innerPad + (availH - drawH) / 2;
+    doc.addImage(kartuMetrics.dataUrl, kartuMetrics.format, drawX, drawY, drawW, drawH);
+
+    if (siswa.kartuPelajarFileName) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.2);
+      doc.setTextColor(100, 116, 139);
+      doc.text(`Lampiran: ${siswa.kartuPelajarFileName}`, boxX + boxW / 2, boxY + boxH - 2.5, {align: 'center'});
+    }
+  } else {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(100, 116, 139);
+    doc.text(
+      'Kartu Pelajar belum diunggah oleh Admin.',
+      boxX + boxW / 2,
+      boxY + boxH / 2,
+      {align: 'center'}
+    );
+  }
+
+  // Blok Tanda Tangan Kepala Sekolah di bagian bawah kertas yang sama
+  const sigY = pageHeight - 23;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.2);
+  doc.setTextColor(30, 41, 59);
+  doc.text(`Besakih, ${formatTanggalId(new Date().toISOString())}`, 132, sigY);
+  doc.text(`Kepala ${school.nama}`, 132, sigY + 4);
+  doc.setFont('helvetica', 'bold');
+  doc.text(kepalaSekolah?.nama || 'Kepala Sekolah', 132, sigY + 15);
+  if (kepalaSekolah?.nip) {
+    doc.setFont('helvetica', 'normal');
+    doc.text(`NIP. ${kepalaSekolah.nip}`, 132, sigY + 18.8);
+  }
+}
+
+export async function exportSingleStudentIdentityPdf(
+  siswa: Siswa,
+  periodLabel: string,
+  school: SchoolProfile,
+  kepalaSekolah?: KepalaSekolah
+) {
+  const doc = new jsPDF({orientation: 'portrait', unit: 'mm', format: 'a4'});
+  await renderStudentIdentitySingleSheet(doc, siswa, periodLabel, school, kepalaSekolah);
+  const safeName = siswa.nama.replace(/[^a-zA-Z0-9._-]/g, '_');
+  doc.save(`Identitas_1Kertas_${safeName}_Kelas_${siswa.kelas}.pdf`);
+}
+
+export async function exportClassStudentIdentitiesPdf(
+  kelas: KelasLevel,
+  siswas: Siswa[],
+  periodLabel: string,
+  school: SchoolProfile,
+  kepalaSekolah?: KepalaSekolah
+) {
+  const doc = new jsPDF({orientation: 'portrait', unit: 'mm', format: 'a4'});
+  for (let i = 0; i < siswas.length; i++) {
+    if (i > 0) doc.addPage();
+    await renderStudentIdentitySingleSheet(doc, siswas[i], periodLabel, school, kepalaSekolah);
+  }
+  doc.save(`Identitas_Lengkap_1Kertas_Kelas_${kelas}.pdf`);
+}
+
+

@@ -16,6 +16,7 @@ export type MenuKey =
   | 'nilai-siswa'
   | 'administrasi-guru'
   | 'sarana-prasarana'
+  | 'keuangan'
   | 'prestasi'
   | 'panel-admin'
   | 'pengaturan';
@@ -121,6 +122,7 @@ export interface UserAccount {
   guruId?: string;
   stafId?: string;
   aksesSarpras?: boolean;
+  aksesKeuangan?: boolean;
   tugasTambahan?: string;
 }
 
@@ -227,6 +229,11 @@ export interface Siswa {
   alamat: string;
   namaOrtu: string;
   noHpOrtu: string;
+  foto3x4?: string;
+  kartuPelajarFileId?: string;
+  kartuPelajarFileName?: string;
+  kartuPelajarFileType?: string;
+  kartuPelajarPreviewUrl?: string;
 }
 
 export interface NilaiRecord {
@@ -355,6 +362,40 @@ export interface ActivityLog {
   detail: string;
 }
 
+export interface FinancePeriod {
+  id: string;
+  tahun: string;
+  label: string;
+  keterangan?: string;
+  aktif: boolean;
+  createdAt: string;
+}
+
+export interface FinanceTransaction {
+  id: string;
+  tanggal: string;
+  kodeBukti?: string;
+  kategori: string;
+  uraian: string;
+  pemasukan: number;
+  penarikan: number;
+  keterangan?: string;
+}
+
+export interface FinanceWorksheet {
+  id: string;
+  financePeriodId: string;
+  nama: string;
+  sumberDana: string;
+  saldoAwal: number;
+  catatan?: string;
+  transactions: FinanceTransaction[];
+  createdByUserId?: string;
+  createdByName?: string;
+  updatedBy?: string;
+  updatedAt: string;
+}
+
 export interface SchoolDatabaseState {
   version: number;
   periods: EducationPeriod[];
@@ -377,5 +418,9 @@ export interface SchoolDatabaseState {
   assets: SaranaAsset[];
   prestasis: Prestasi[];
   guruCertificates: GuruCertificate[];
+  financePeriods: FinancePeriod[];
+  activeFinancePeriodId: string;
+  financeWorksheets: FinanceWorksheet[];
+  readNotificationsByUser: Record<string, string[]>;
   activityLogs: ActivityLog[];
 }

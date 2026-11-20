@@ -18,6 +18,7 @@ import {
   Search,
   Trash2,
   Users,
+  Wallet,
 } from 'lucide-react';
 import {useSchool} from '../context/SchoolContext';
 import {SCHOOL_BANNER_IMAGE} from '../data/seedData';
@@ -302,6 +303,33 @@ export const BerandaPage: React.FC<{onNavigate?: (menu: MenuKey) => void}> = ({o
           </div>
         </div>
       </section>
+
+      {/* Pintasan Tugas Tambahan Keuangan Sekolah untuk Staf yang ditugaskan */}
+      {currentUser?.role === 'STAF' && currentUser?.aksesKeuangan && onNavigate && (
+        <section className="rounded-2xl border border-amber-200 dark:border-amber-800/70 bg-amber-50/80 dark:bg-amber-950/30 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-start sm:items-center gap-3">
+            <div className="p-2.5 rounded-xl bg-amber-600 text-white shrink-0">
+              <Wallet className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="text-sm font-display font-bold text-amber-950 dark:text-amber-100">
+                Tugas Pengelola Keuangan Sekolah
+              </p>
+              <p className="text-xs text-amber-800 dark:text-amber-300 mt-0.5">
+                Anda ditugaskan untuk menginput pemasukan, penarikan, saldo, kertas kerja, serta unggah berkas Excel Keuangan Sekolah.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => onNavigate('keuangan')}
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs sm:text-sm font-semibold shrink-0 cursor-pointer self-start sm:self-auto"
+          >
+            <Wallet className="w-4 h-4" />
+            Buka Keuangan Sekolah
+          </button>
+        </section>
+      )}
 
       {/* Pintasan Tugas Tambahan Sarana & Prasarana untuk Staf/Guru yang ditugaskan */}
       {!isAdmin && currentUser?.aksesSarpras && onNavigate && (

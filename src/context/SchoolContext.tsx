@@ -16,6 +16,8 @@ import {
   Announcement,
   Building,
   EducationPeriod,
+  FinancePeriod,
+  FinanceWorksheet,
   GradeSettings,
   Guru,
   GuruCertificate,
@@ -33,6 +35,7 @@ import {
   StudentRaporExtras,
   UserAccount,
 } from '../types/school';
+import {computeFinancePeriodTotals} from '../utils/financeUtils';
 import {evaluateStudentPromotionStatus} from '../utils/gradeUtils';
 import {ConfirmDialogModal, ConfirmDialogState, ToastContainer, ToastItem} from '../components/ui/ToastAndConfirm';
 
@@ -42,6 +45,14 @@ export interface CreatePeriodOptions {
   setAsActive: boolean;
   copyFromPeriodId?: string;
   promoteClasses?: boolean;
+}
+
+export interface CreateFinancePeriodOptions {
+  tahun: string;
+  label?: string;
+  keterangan?: string;
+  setAsActive: boolean;
+  carryOverFromPeriodId?: string;
 }
 
 interface SchoolContextValue {
@@ -118,12 +129,24 @@ interface SchoolContextValue {
   // Tampilan & Catatan Halaman Login
   updateLoginConfig: (config: LoginConfig, adminActor?: UserAccount) => void;
 
-  // Manajemen Akun & Backup/Restore
+  // Manajemen Akun, Penugasan & Backup/Restore
   saveAccount: (account: UserAccount, isNew?: boolean) => void;
   deleteAccount: (userId: string) => void;
   toggleSarprasAccess: (userId: string) => void;
+  toggleKeuanganAccess: (userId: string) => void;
   restoreFromBackup: (newState: SchoolDatabaseState) => void;
   resetAllToSeed: () => Promise<void>;
+
+  // Keuangan Sekolah (Multi-Tahun & Kertas Kerja)
+  createFinancePeriod: (opts: CreateFinancePeriodOptions) => {ok: boolean; periodId?: string; message?: string};
+  setActiveFinancePeriod: (periodId: string) => void;
+  deleteFinancePeriod: (periodId: string) => void;
+  saveFinanceWorksheet: (ws: FinanceWorksheet, isNew?: boolean) => void;
+  deleteFinanceWorksheet: (wsId: string) => void;
+
+  // Notifikasi Lonceng Pengumuman / Catatan Admin
+  markNotificationRead: (notifKey: string) => void;
+  markAllNotificationsRead: (notifKeys: string[]) => void;
 }
 
 const SchoolContext = createContext<SchoolContextValue | null>(null);
@@ -654,19 +677,39 @@ export const SchoolProvider: React.FC<{children: React.ReactNode}> = ({children}
 
   const saveStaf = useCallback(
     (staf: Staf, isNew?: boolean) => {
-      setState((prev) => ({
-        ...prev,
-        stafs: isNew ? [...prev.stafs, staf] : prev.stafs.map((s) => (s.id === staf.id ? staf : s)),
-        activityLogs: appendLog(
-          prev,
-          isNew ? 'TAMBAH' : 'UBAH',
-          'Data Staf',
-          `${isNew ? 'Menambah' : 'Memperbarui'} data staf: ${staf.nama}`
-        ),
-      }));
+      setState((prev) => {
+        const nextStafs = isNew
+          ? [...prev.stafs, staf]
+          : prev.stafs.map((s) => (s.id === staf.id ? staf : s));
+        const nextAccounts = prev.accounts.map((acc) => {
+          if (acc.role !== 'STAF') return acc;
+          const isLinked =
+            acc.stafId === staf.id ||
+            (isNew && currentUser?.role === 'STAF' && acc.id === currentUser.id);
+          if (isLinked) {
+            return {
+              ...acc,
+              stafId: staf.id,
+              namaLengkap: staf.nama,
+            };
+          }
+          return acc;
+        });
+        return {
+          ...prev,
+          stafs: nextStafs,
+          accounts: nextAccounts,
+          activityLogs: appendLog(
+            prev,
+            isNew ? 'TAMBAH' : 'UBAH',
+            'Data Staf',
+            `${isNew ? 'Menambah' : 'Memperbarui'} data staf: ${staf.nama}`
+          ),
+        };
+      });
       showToast(`Data staf ${staf.nama} berhasil disimpan.`, 'success');
     },
-    [appendLog, showToast]
+    [appendLog, showToast, currentUser]
   );
 
   const deleteStaf = useCallback(
@@ -1176,6 +1219,273 @@ export const SchoolProvider: React.FC<{children: React.ReactNode}> = ({children}
     [appendLog, showToast]
   );
 
+  const toggleKeuanganAccess = useCallback(
+    (userId: string) => {
+      let resultMsg = '';
+      setState((prev) => {
+        const target = prev.accounts.find((a) => a.id === userId);
+        if (!target) return prev;
+        if (target.role !== 'STAF') {
+          resultMsg = 'Hak input Keuangan Sekolah hanya dapat diberikan kepada akun Staf.';
+          return prev;
+        }
+        const nextEnabled = !target.aksesKeuangan;
+        resultMsg = nextEnabled
+          ? `Tugas input Keuangan Sekolah diaktifkan untuk ${target.namaLengkap}.`
+          : `Tugas input Keuangan Sekolah dinonaktifkan untuk ${target.namaLengkap}.`;
+        return {
+          ...prev,
+          accounts: prev.accounts.map((a) =>
+            a.id === userId
+              ? {
+                  ...a,
+                  aksesKeuangan: nextEnabled,
+                  tugasTambahan: nextEnabled
+                    ? a.tugasTambahan || 'Pengelola & Input Keuangan Sekolah'
+                    : a.tugasTambahan,
+                }
+              : a
+          ),
+          activityLogs: appendLog(
+            prev,
+            'UBAH',
+            'Penugasan Keuangan',
+            `${nextEnabled ? 'Memberikan' : 'Mencabut'} akses input Keuangan Sekolah untuk ${target.namaLengkap} (${target.username}).`
+          ),
+        };
+      });
+      if (resultMsg) {
+        showToast(
+          resultMsg,
+          resultMsg.includes('hanya dapat') ? 'warning' : 'success'
+        );
+      }
+    },
+    [appendLog, showToast]
+  );
+
+  // === KEUANGAN SEKOLAH (PERIODE TAHUNAN & KERTAS KERJA) ===
+  const createFinancePeriod = useCallback(
+    (opts: CreateFinancePeriodOptions) => {
+      const cleanYear = opts.tahun.trim();
+      if (!cleanYear) {
+        return {ok: false, message: 'Tahun anggaran wajib diisi (contoh: 2028).'};
+      }
+      const duplicate = state.financePeriods.some(
+        (p) => p.tahun.toLowerCase() === cleanYear.toLowerCase()
+      );
+      if (duplicate) {
+        return {ok: false, message: `Periode keuangan Tahun ${cleanYear} sudah terdaftar.`};
+      }
+
+      const newId = `fin-${cleanYear.replace(/[^0-9a-zA-Z]/g, '')}-${Date.now().toString().slice(-3)}`;
+      const newPeriod: FinancePeriod = {
+        id: newId,
+        tahun: cleanYear,
+        label: (opts.label || `Tahun Anggaran ${cleanYear}`).trim(),
+        keterangan: opts.keterangan?.trim() || `Pengelolaan keuangan sekolah tahun ${cleanYear}.`,
+        aktif: opts.setAsActive,
+        createdAt: new Date().toISOString(),
+      };
+
+      setState((prev) => {
+        const updatedPeriods = [
+          ...prev.financePeriods.map((p) => (opts.setAsActive ? {...p, aktif: false} : p)),
+          newPeriod,
+        ].sort((a, b) => a.tahun.localeCompare(b.tahun));
+
+        let starterWorksheet: FinanceWorksheet | null = null;
+        if (opts.carryOverFromPeriodId) {
+          const sourcePeriod = prev.financePeriods.find((p) => p.id === opts.carryOverFromPeriodId);
+          if (sourcePeriod) {
+            const totals = computeFinancePeriodTotals(sourcePeriod, prev.financeWorksheets);
+            starterWorksheet = {
+              id: `fws-${newId}-1`,
+              financePeriodId: newId,
+              nama: `Kertas Kerja Keuangan ${cleanYear}`,
+              sumberDana: 'Dana BOS & Kas Sekolah',
+              saldoAwal: Math.max(0, totals.totalSaldoAkhir),
+              catatan: `Saldo Awal melanjutkan Saldo Akhir ${sourcePeriod.label}.`,
+              transactions: [],
+              createdByUserId: currentUser?.id,
+              createdByName: currentUser?.namaLengkap,
+              updatedBy: currentUser?.namaLengkap,
+              updatedAt: new Date().toISOString(),
+            };
+          }
+        } else {
+          starterWorksheet = {
+            id: `fws-${newId}-1`,
+            financePeriodId: newId,
+            nama: `Kertas Kerja Keuangan ${cleanYear}`,
+            sumberDana: 'Dana BOS Reguler',
+            saldoAwal: 0,
+            catatan: '',
+            transactions: [],
+            createdByUserId: currentUser?.id,
+            createdByName: currentUser?.namaLengkap,
+            updatedBy: currentUser?.namaLengkap,
+            updatedAt: new Date().toISOString(),
+          };
+        }
+
+        return {
+          ...prev,
+          financePeriods: updatedPeriods,
+          activeFinancePeriodId: opts.setAsActive ? newId : prev.activeFinancePeriodId,
+          financeWorksheets: starterWorksheet
+            ? [...prev.financeWorksheets, starterWorksheet]
+            : prev.financeWorksheets,
+          activityLogs: appendLog(
+            prev,
+            'TAMBAH',
+            'Periode Keuangan',
+            `Membuat periode keuangan ${newPeriod.label}.`
+          ),
+        };
+      });
+
+      showToast(`Periode keuangan ${newPeriod.label} berhasil dibuat.`, 'success');
+      return {ok: true, periodId: newId};
+    },
+    [state.financePeriods, currentUser, appendLog, showToast]
+  );
+
+  const setActiveFinancePeriod = useCallback(
+    (periodId: string) => {
+      setState((prev) => {
+        const target = prev.financePeriods.find((p) => p.id === periodId);
+        if (!target) return prev;
+        return {
+          ...prev,
+          activeFinancePeriodId: periodId,
+          financePeriods: prev.financePeriods.map((p) => ({...p, aktif: p.id === periodId})),
+          activityLogs: appendLog(
+            prev,
+            'UBAH',
+            'Periode Keuangan',
+            `Mengaktifkan periode keuangan ${target.label}.`
+          ),
+        };
+      });
+      showToast('Periode keuangan aktif berhasil diperbarui.', 'success');
+    },
+    [appendLog, showToast]
+  );
+
+  const deleteFinancePeriod = useCallback(
+    (periodId: string) => {
+      if (state.financePeriods.length <= 1) {
+        showToast('Minimal harus ada 1 periode keuangan yang tersimpan.', 'warning');
+        return;
+      }
+      if (periodId === state.activeFinancePeriodId) {
+        showToast('Tidak dapat menghapus periode keuangan yang sedang aktif.', 'warning');
+        return;
+      }
+      setState((prev) => {
+        const target = prev.financePeriods.find((p) => p.id === periodId);
+        return {
+          ...prev,
+          financePeriods: prev.financePeriods.filter((p) => p.id !== periodId),
+          financeWorksheets: prev.financeWorksheets.filter((w) => w.financePeriodId !== periodId),
+          activityLogs: appendLog(
+            prev,
+            'HAPUS',
+            'Periode Keuangan',
+            `Menghapus periode keuangan ${target?.label || periodId}.`
+          ),
+        };
+      });
+      showToast('Periode keuangan berhasil dihapus.', 'info');
+    },
+    [state.financePeriods.length, state.activeFinancePeriodId, appendLog, showToast]
+  );
+
+  const saveFinanceWorksheet = useCallback(
+    (ws: FinanceWorksheet, isNew?: boolean) => {
+      setState((prev) => {
+        const updatedWs: FinanceWorksheet = {
+          ...ws,
+          updatedBy: currentUser?.namaLengkap || ws.updatedBy,
+          updatedAt: new Date().toISOString(),
+        };
+        const exists = !isNew && prev.financeWorksheets.some((w) => w.id === updatedWs.id);
+        return {
+          ...prev,
+          financeWorksheets: exists
+            ? prev.financeWorksheets.map((w) => (w.id === updatedWs.id ? updatedWs : w))
+            : [...prev.financeWorksheets, updatedWs],
+          activityLogs: appendLog(
+            prev,
+            exists ? 'UBAH' : 'TAMBAH',
+            'Kertas Kerja Keuangan',
+            `${exists ? 'Memperbarui' : 'Menambah'} kertas kerja "${updatedWs.nama}" (${updatedWs.transactions.length} transaksi).`
+          ),
+        };
+      });
+      showToast(`Kertas kerja "${ws.nama}" berhasil disimpan.`, 'success');
+    },
+    [currentUser, appendLog, showToast]
+  );
+
+  const deleteFinanceWorksheet = useCallback(
+    (wsId: string) => {
+      setState((prev) => {
+        const target = prev.financeWorksheets.find((w) => w.id === wsId);
+        return {
+          ...prev,
+          financeWorksheets: prev.financeWorksheets.filter((w) => w.id !== wsId),
+          activityLogs: appendLog(
+            prev,
+            'HAPUS',
+            'Kertas Kerja Keuangan',
+            `Menghapus kertas kerja "${target?.nama || wsId}".`
+          ),
+        };
+      });
+      showToast('Kertas kerja keuangan berhasil dihapus.', 'info');
+    },
+    [appendLog, showToast]
+  );
+
+  // === NOTIFIKASI LONCENG ===
+  const markNotificationRead = useCallback(
+    (notifKey: string) => {
+      if (!currentUser) return;
+      setState((prev) => {
+        const currentList = prev.readNotificationsByUser?.[currentUser.id] || [];
+        if (currentList.includes(notifKey)) return prev;
+        return {
+          ...prev,
+          readNotificationsByUser: {
+            ...(prev.readNotificationsByUser || {}),
+            [currentUser.id]: [...currentList, notifKey].slice(-200),
+          },
+        };
+      });
+    },
+    [currentUser]
+  );
+
+  const markAllNotificationsRead = useCallback(
+    (notifKeys: string[]) => {
+      if (!currentUser || notifKeys.length === 0) return;
+      setState((prev) => {
+        const currentList = prev.readNotificationsByUser?.[currentUser.id] || [];
+        const merged = Array.from(new Set([...currentList, ...notifKeys])).slice(-200);
+        return {
+          ...prev,
+          readNotificationsByUser: {
+            ...(prev.readNotificationsByUser || {}),
+            [currentUser.id]: merged,
+          },
+        };
+      });
+    },
+    [currentUser]
+  );
+
   const restoreFromBackup = useCallback(
     (newState: SchoolDatabaseState) => {
       const restoreLog: ActivityLog = {
@@ -1262,8 +1572,16 @@ export const SchoolProvider: React.FC<{children: React.ReactNode}> = ({children}
     saveAccount,
     deleteAccount,
     toggleSarprasAccess,
+    toggleKeuanganAccess,
     restoreFromBackup,
     resetAllToSeed,
+    createFinancePeriod,
+    setActiveFinancePeriod,
+    deleteFinancePeriod,
+    saveFinanceWorksheet,
+    deleteFinanceWorksheet,
+    markNotificationRead,
+    markAllNotificationsRead,
   };
 
   return (

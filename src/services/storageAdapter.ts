@@ -99,7 +99,7 @@ function migrateStateWithPeriods(
       : fallbackSeed.accounts;
 
   const hasStafAccount = existingAccounts.some((a) => a.role === 'STAF');
-  const mergedAccounts = hasStafAccount
+  let mergedAccounts = hasStafAccount
     ? existingAccounts
     : [
         ...existingAccounts,
@@ -112,10 +112,39 @@ function migrateStateWithPeriods(
         ),
       ];
 
+  const shouldBackfillKeuangan = (rawState.version ?? 0) < 7;
+  if (shouldBackfillKeuangan && !mergedAccounts.some((a) => a.aksesKeuangan)) {
+    mergedAccounts = mergedAccounts.map((a) =>
+      a.id === 'usr-staf-2' || a.username.toLowerCase() === 'staf2'
+        ? {
+            ...a,
+            aksesKeuangan: true,
+            tugasTambahan: a.tugasTambahan || 'Operator BOS, Keuangan & Inventaris Sarpras',
+          }
+        : a
+    );
+  }
+
+  const financePeriods =
+    Array.isArray(rawState.financePeriods) && rawState.financePeriods.length > 0
+      ? rawState.financePeriods
+      : fallbackSeed.financePeriods;
+
+  const activeFinancePeriodId =
+    rawState.activeFinancePeriodId &&
+    financePeriods.some((fp) => fp.id === rawState.activeFinancePeriodId)
+      ? rawState.activeFinancePeriodId
+      : financePeriods.find((fp) => fp.aktif)?.id || financePeriods[0].id;
+
+  const financeWorksheets =
+    Array.isArray(rawState.financeWorksheets) && rawState.financeWorksheets.length > 0
+      ? rawState.financeWorksheets
+      : fallbackSeed.financeWorksheets;
+
   return {
     ...fallbackSeed,
     ...rawState,
-    version: 6,
+    version: 7,
     periods,
     activePeriodId,
     accounts: mergedAccounts,
@@ -129,6 +158,13 @@ function migrateStateWithPeriods(
     guruCertificates: Array.isArray(rawState.guruCertificates)
       ? rawState.guruCertificates
       : fallbackSeed.guruCertificates,
+    financePeriods,
+    activeFinancePeriodId,
+    financeWorksheets,
+    readNotificationsByUser:
+      rawState.readNotificationsByUser && typeof rawState.readNotificationsByUser === 'object'
+        ? rawState.readNotificationsByUser
+        : {},
     subjects:
       Array.isArray(rawState.subjects) && rawState.subjects.length > 0
         ? Array.from(new Set(rawState.subjects.filter((s) => typeof s === 'string' && s.trim() !== '')))

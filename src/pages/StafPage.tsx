@@ -12,6 +12,7 @@ import {
   Trash2,
   Upload,
   UserCog,
+  Wallet,
 } from 'lucide-react';
 import {useSchool} from '../context/SchoolContext';
 import {compressImageToDataUrl} from '../services/mediaDb';
@@ -34,22 +35,37 @@ export const StafPage: React.FC = () => {
   const {
     state,
     currentUser,
+    currentStaf,
     saveStaf,
     deleteStaf,
     saveAccount,
     toggleSarprasAccess,
+    toggleKeuanganAccess,
     confirmDelete,
     showToast,
   } = useSchool();
   const isAdmin = currentUser?.role === 'ADMIN';
+  const isStaf = currentUser?.role === 'STAF';
 
   const [modalOpen, setModalOpen] = useState(false);
   const [isNew, setIsNew] = useState(false);
   const [form, setForm] = useState<Staf>(emptyStaf());
 
+  const displayedStafs = isAdmin ? state.stafs : currentStaf ? [currentStaf] : [];
+
   const openAdd = () => {
     setIsNew(true);
     setForm(emptyStaf());
+    setModalOpen(true);
+  };
+
+  const openCreateSelfProfile = () => {
+    setIsNew(true);
+    setForm({
+      ...emptyStaf(),
+      nama: currentUser?.namaLengkap || '',
+      jabatan: currentUser?.tugasTambahan || 'Staf Administrasi Sekolah',
+    });
     setModalOpen(true);
   };
 
@@ -87,13 +103,15 @@ export const StafPage: React.FC = () => {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-display font-bold text-slate-900 dark:text-slate-100">
-            Staf & Tenaga Kependidikan
+            {isStaf ? 'Profil Staf Saya' : 'Staf & Tenaga Kependidikan'}
           </h1>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-            Tata Usaha, Operator Sekolah, Petugas Perpustakaan, dan Penjaga Sekolah.
+            {isStaf
+              ? 'Kelola dan perbarui identitas profil Anda. Akses dibatasi hanya untuk profil Anda sendiri.'
+              : 'Tata Usaha, Operator Sekolah, Petugas Perpustakaan, dan Penjaga Sekolah.'}
           </p>
         </div>
-        {isAdmin && (
+        {isAdmin ? (
           <button
             type="button"
             onClick={openAdd}
@@ -102,23 +120,51 @@ export const StafPage: React.FC = () => {
             <Plus className="w-4 h-4" />
             Tambah Staf
           </button>
+        ) : (
+          isStaf && (
+            <button
+              type="button"
+              onClick={() => (currentStaf ? openEdit(currentStaf) : openCreateSelfProfile())}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-sm font-semibold transition-colors cursor-pointer self-start"
+            >
+              <Edit3 className="w-4 h-4" />
+              {currentStaf ? 'Edit Profil Saya' : 'Lengkapi Profil Saya'}
+            </button>
+          )
         )}
       </div>
 
-      {state.stafs.length === 0 ? (
+      {displayedStafs.length === 0 ? (
         <EmptyState
           icon={<UserCog className="w-6 h-6" />}
-          title="Belum Ada Data Staf"
-          description="Tambahkan data tenaga kependidikan sekolah melalui tombol Tambah Staf."
+          title={isStaf ? 'Profil Staf Anda Belum Dilengkapi' : 'Belum Ada Data Staf'}
+          description={
+            isStaf
+              ? 'Silakan lengkapi biodata, foto, jabatan, dan kontak profil staf Anda sendiri.'
+              : 'Tambahkan data tenaga kependidikan sekolah melalui tombol Tambah Staf.'
+          }
+          action={
+            isStaf ? (
+              <button
+                type="button"
+                onClick={openCreateSelfProfile}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-sm font-semibold cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                Buat Profil Staf Saya
+              </button>
+            ) : undefined
+          }
         />
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {state.stafs.map((s) => {
+        <div className={`grid gap-4 ${isStaf ? 'grid-cols-1 max-w-2xl' : 'grid-cols-1 md:grid-cols-2'}`}>
+          {displayedStafs.map((s) => {
             const linkedAccount = state.accounts.find(
               (a) =>
                 a.role === 'STAF' &&
                 (a.stafId === s.id || a.namaLengkap.toLowerCase() === s.nama.toLowerCase())
             );
+            const canEditCard = isAdmin || (isStaf && currentStaf?.id === s.id);
             const handleCreateStafLogin = () => {
               const baseSlug =
                 s.nama
@@ -155,7 +201,7 @@ export const StafPage: React.FC = () => {
                   <Avatar src={s.foto} name={s.nama} size="lg" />
                   <div className="min-w-0 flex-1">
                     <p className="text-xs font-semibold text-teal-700 dark:text-teal-400">
-                      {s.status} · <span className="font-mono-num text-slate-500 dark:text-slate-400">{s.nipAtauId}</span>
+                      {s.status} · <span className="font-mono-num text-slate-500 dark:text-slate-400">{s.nipAtauId || '-'}</span>
                     </p>
                     <h2 className="mt-0.5 text-base font-display font-semibold text-slate-900 dark:text-slate-100 truncate">
                       {s.nama}
@@ -177,7 +223,7 @@ export const StafPage: React.FC = () => {
                       </p>
                     </div>
 
-                    {/* Status Akun Login & Penugasan Sarpras */}
+                    {/* Status Akun Login & Penugasan */}
                     <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center gap-2 text-[11px]">
                       {linkedAccount ? (
                         <>
@@ -198,14 +244,35 @@ export const StafPage: React.FC = () => {
                               ? 'Tugas: Input Sarpras'
                               : 'Tanpa Tugas Sarpras'}
                           </span>
+                          <span
+                            className={`inline-flex items-center gap-1 font-semibold ${
+                              linkedAccount.aksesKeuangan
+                                ? 'text-amber-700 dark:text-amber-400'
+                                : 'text-slate-400'
+                            }`}
+                          >
+                            <Wallet className="w-3 h-3" />
+                            {linkedAccount.aksesKeuangan
+                              ? 'Tugas: Input Keuangan'
+                              : 'Tanpa Tugas Keuangan'}
+                          </span>
                           {isAdmin && (
-                            <button
-                              type="button"
-                              onClick={() => toggleSarprasAccess(linkedAccount.id)}
-                              className="ml-auto px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 hover:border-teal-600 text-[11px] font-semibold text-teal-700 dark:text-teal-400 cursor-pointer"
-                            >
-                              {linkedAccount.aksesSarpras ? 'Cabut Tugas Sarpras' : 'Tugaskan Input Sarpras'}
-                            </button>
+                            <div className="ml-auto flex flex-wrap gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => toggleSarprasAccess(linkedAccount.id)}
+                                className="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 hover:border-teal-600 text-[11px] font-semibold text-teal-700 dark:text-teal-400 cursor-pointer"
+                              >
+                                {linkedAccount.aksesSarpras ? 'Cabut Sarpras' : 'Tugaskan Sarpras'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => toggleKeuanganAccess(linkedAccount.id)}
+                                className="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 hover:border-amber-600 text-[11px] font-semibold text-amber-700 dark:text-amber-400 cursor-pointer"
+                              >
+                                {linkedAccount.aksesKeuangan ? 'Cabut Keuangan' : 'Tugaskan Keuangan'}
+                              </button>
+                            </div>
                           )}
                         </>
                       ) : (
@@ -226,30 +293,33 @@ export const StafPage: React.FC = () => {
                   </div>
                 </div>
 
-                {isAdmin && (
+                {canEditCard && (
                   <div className="flex flex-col gap-1.5 shrink-0">
                     <button
                       type="button"
                       onClick={() => openEdit(s)}
-                      className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:text-teal-700 hover:bg-slate-100 dark:hover:bg-slate-800"
-                      aria-label="Edit staf"
+                      className="inline-flex items-center gap-1.5 p-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:text-teal-700 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                      aria-label="Edit profil staf"
+                      title={isStaf ? 'Edit Profil Saya' : 'Edit staf'}
                     >
                       <Edit3 className="w-4 h-4" />
                     </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        confirmDelete(
-                          'Hapus Data Staf?',
-                          `Data tenaga kependidikan "${s.nama}" akan dihapus.`,
-                          () => deleteStaf(s.id)
-                        )
-                      }
-                      className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30"
-                      aria-label="Hapus staf"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          confirmDelete(
+                            'Hapus Data Staf?',
+                            `Data tenaga kependidikan "${s.nama}" akan dihapus.`,
+                            () => deleteStaf(s.id)
+                          )
+                        }
+                        className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 cursor-pointer"
+                        aria-label="Hapus staf"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -261,7 +331,15 @@ export const StafPage: React.FC = () => {
       <Modal
         open={modalOpen}
         onClose={() => setModalOpen(false)}
-        title={isNew ? 'Tambah Staf Baru' : `Edit Data Staf — ${form.nama}`}
+        title={
+          isStaf
+            ? isNew
+              ? 'Lengkapi Profil Staf Saya'
+              : `Edit Profil Saya — ${form.nama}`
+            : isNew
+              ? 'Tambah Staf Baru'
+              : `Edit Data Staf — ${form.nama}`
+        }
       >
         <form onSubmit={handleSave} className="space-y-4">
           <div className="flex items-center gap-4">
